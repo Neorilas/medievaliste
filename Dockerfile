@@ -10,9 +10,12 @@ RUN apt-get update -qq && apt-get install -qq -y --no-install-recommends \
 WORKDIR /app
 
 # Stage 1: deps con caché (sin postinstall: prisma generate va en el builder).
+# npm install (no ci): el package-lock se generó en Windows y no trae los
+# binarios nativos de Linux/arm64 (Tailwind v4 / @emnapi); ci fallaría por
+# desincronía. install resuelve el árbol correcto para esta plataforma.
 FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm ci --no-audit --no-fund --prefer-offline
+RUN npm install --no-audit --no-fund
 
 # Stage 2: build de Next.js (genera el cliente Prisma en lib/generated/prisma).
 # DATABASE_URL placeholder: lib/prisma.ts exige la variable al importar el módulo,
