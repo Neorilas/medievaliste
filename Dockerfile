@@ -15,7 +15,11 @@ COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund --prefer-offline
 
 # Stage 2: build de Next.js (genera el cliente Prisma en lib/generated/prisma).
+# DATABASE_URL placeholder: lib/prisma.ts exige la variable al importar el módulo,
+# y next build carga los módulos. No se conecta a nada en build; el valor real
+# lo inyecta el .env en runtime (esta ENV no llega a la imagen final, otro stage).
 FROM base AS builder
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx prisma generate
