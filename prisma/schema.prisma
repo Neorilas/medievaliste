@@ -1,0 +1,139 @@
+// Asentamiento v0 — esquema de datos.
+// Principio rector: el servidor es la única fuente de verdad.
+// Toda la lógica de balance vive en lib/gameConfig.ts, NO aquí.
+// learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Identidad del jugador. Es a la vez el User de Auth.js (Google + credenciales)
+// y el dueño de un asentamiento. Antes existía un modelo Player separado; se
+// fusionó aquí para tener una sola identidad.
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String? // solo para login con email/contraseña (null si solo usa Google)
+  createdAt     DateTime  @default(now())
+
+  accounts   Account[]
+  sessions   Session[]
+  settlement Settlement?
+}
+
+// Tablas estándar de Auth.js (adaptador de Prisma).
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Settlement {
+  id            String   @id @default(cuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String   @unique
+  name          String // nombre del asentamiento, definido por el jugador
+  townHallLevel Int      @default(1) // nivel del Ayuntamiento: techo global
+
+  // Recursos (cantidades actuales)
+  food    Float @default(0)
+  wood    Float @default(0)
+  stone   Float @default(0)
+  welfare Float @default(100) // bienestar, arranca al 100%
+
+  // Población
+  population Int @default(3) // colonos totales (asignados + libres)
+
+  // Motor de cálculo diferido
+  lastTick DateTime @default(now())
+
+  // Acumuladores de progreso entre recálculos (no están en el diseño v0 original,
+  // pero el motor diferido los necesita para que el progreso no se reinicie en cada
+  // interacción: sin esto, abrir la app a menudo impediría crecer o caer en hambruna).
+  growthProgress Float @default(0) // horas elegibles acumuladas hacia el próximo colono
+  famineProgress Float @default(0) // horas de bienestar bajo umbral acumuladas hacia la próxima pérdida
+
+  buildings Building[]
+  events    Event[]
+
+  createdAt DateTime @default(now())
+}
+
+model Building {
+  id           String       @id @default(cuid())
+  settlement   Settlement   @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  settlementId String
+  type         BuildingType
+  level        Int          @default(1)
+  workers      Int          @default(0) // colonos asignados a ESTE edificio
+
+  createdAt DateTime @default(now())
+
+  @@index([settlementId])
+}
+
+enum BuildingType {
+  TOWN_HALL // Ayuntamiento: limita nº de edificios y nivel máximo de cada uno
+  FARM // Granja: produce comida (requiere colonos)
+  SAWMILL // Serrería: produce madera (requiere colonos)
+  QUARRY // Cantera: produce piedra (requiere colonos; se desbloquea más tarde)
+  HOUSE // Casa: aumenta capacidad de población
+  WAREHOUSE // Almacén: aumenta topes de almacenamiento
+  PLAZA // Plaza: genera bienestar (requiere colonos)
+}
+
+model Event {
+  id           String     @id @default(cuid())
+  settlement   Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  settlementId String
+  type         EventType
+  payload      Json // datos del efecto, flexible
+  occurredAt   DateTime   @default(now())
+  seen         Boolean    @default(false) // si el jugador ya lo vio al reconectar
+
+  @@index([settlementId])
+}
+
+enum EventType {
+  COLONIST_ARRIVED
+  PLAGUE
+  FAMINE // hambruna: pérdida de población por bienestar bajo
+  // Futuro: ATTACKED, ALLIANCE_REQUEST, etc. (no implementar en v0)
+}

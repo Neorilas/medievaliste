@@ -1,0 +1,23 @@
+# Postgres local para desarrollo de Asentamiento v0.
+# En producción la base vive en Hetzner; aquí solo desarrollamos/testeamos.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: asentamiento-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: asentamiento
+      POSTGRES_PASSWORD: asentamiento_dev
+      POSTGRES_DB: asentamiento
+    ports:
+      - "5432:5432"
+    volumes:
+      - asentamiento-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asentamiento -d asentamiento"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  asentamiento-pgdata:

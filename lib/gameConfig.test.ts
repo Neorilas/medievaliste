@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildCost,
+  maxWorkers,
+  productionPerHour,
+  storageCap,
+  townHallUpgradeCost,
+  upgradeCost,
+  TOWN_HALL,
+  MAX_TOWN_HALL_LEVEL,
+} from "./gameConfig";
+import { BuildingType } from "./generated/prisma/enums";
+
+describe("buildCost", () => {
+  it("devuelve el coste de cada edificio construible", () => {
+    expect(buildCost(BuildingType.HOUSE)).toEqual({ wood: 15 });
+    expect(buildCost(BuildingType.QUARRY)).toEqual({ wood: 20, stone: 10 });
+  });
+
+  it("el Ayuntamiento no es construible (coste vacío)", () => {
+    expect(buildCost(BuildingType.TOWN_HALL)).toEqual({});
+  });
+});
+
+describe("upgradeCost", () => {
+  it("usa los costes explícitos cuando existen", () => {
+    expect(upgradeCost(BuildingType.FARM, 2)).toEqual({ wood: 24 });
+    expect(upgradeCost(BuildingType.WAREHOUSE, 2)).toEqual({ wood: 30, stone: 10 });
+  });
+
+  it("aplica la curva por defecto cuando el nivel no está listado", () => {
+    // Granja N3 no listado → base {wood:18} * 1.3*(3-1) = 18*2.6 = 46.8 → ceil 47
+    expect(upgradeCost(BuildingType.FARM, 3)).toEqual({ wood: 47 });
+  });
+
+  it("escala todos los recursos del coste base en la curva por defecto", () => {
+    // Cantera base {wood:20, stone:10}, N3 → factor 2.6 → wood 52, stone 26
+    expect(upgradeCost(BuildingType.QUARRY, 3)).toEqual({ wood: 52, stone: 26 });
+  });
+});
+
+describe("townHallUpgradeCost", () => {
+  it("coincide con la tabla del Ayuntamiento", () => {
+    expect(townHallUpgradeCost(2)).toEqual({ wood: 120, stone: 40 });
+    expect(townHallUpgradeCost(3)).toEqual({ wood: 300, stone: 120 });
+  });
+
+  it("nivel inexistente → coste vacío", () => {
+    expect(townHallUpgradeCost(99)).toEqual({});
+  });
+
+  it("la tabla cubre hasta el nivel máximo", () => {
+    expect(TOWN_HALL[MAX_TOWN_HALL_LEVEL]).toBeDefined();
+  });
+});
+
+describe("storageCap", () => {
+  it("niveles más allá de la tabla extrapolan con el último conocido", () => {
+    expect(storageCap(99)).toBe(350); // tope del nivel 3
+  });
+  it("nivel negativo se trata como 0", () => {
+    expect(storageCap(-5)).toBe(60);
+  });
+});
+
+describe("maxWorkers / productionPerHour en niveles altos", () => {
+  it("cada nivel añade un puesto", () => {
+    expect(maxWorkers(BuildingType.SAWMILL, 1)).toBe(2);
+    expect(maxWorkers(BuildingType.SAWMILL, 3)).toBe(4);
+  });
+
+  it("los puestos extra usan la última marginal definida, escalada por nivel", () => {
+    // Serrería L1 marginales [2,3]; L3: x1.6^2=2.56; 4 puestos: 2,3,3,3 = 11 → *2.56
+    const expected = (2 + 3 + 3 + 3) * Math.pow(1.6, 2);
+    expect(productionPerHour(BuildingType.SAWMILL, 3, 4)).toBeCloseTo(expected, 5);
+  });
+
+  it("colonos por encima del tope no aportan nada extra", () => {
+    const atCap = productionPerHour(BuildingType.SAWMILL, 3, 4);
+    expect(productionPerHour(BuildingType.SAWMILL, 3, 10)).toBeCloseTo(atCap, 5);
+  });
+});
