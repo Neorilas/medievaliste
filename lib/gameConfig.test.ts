@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCost,
+  cancelDeadlineMs,
+  constructionRefund,
   constructionSeconds,
+  CONSTRUCTION_CANCEL_SECONDS,
   maxWorkers,
   productionPerHour,
   storageCap,
@@ -47,6 +50,38 @@ describe("upgradeCost", () => {
   it("la Cantera tiene costes de mejora explícitos con piedra (construir es solo madera)", () => {
     expect(upgradeCost(BuildingType.QUARRY, 2)).toEqual({ wood: 30, stone: 15 });
     expect(upgradeCost(BuildingType.QUARRY, 3)).toEqual({ wood: 60, stone: 35 });
+  });
+});
+
+describe("cancelación de obras", () => {
+  it("el reembolso de una construcción nueva (level 0) es su coste de construir", () => {
+    expect(constructionRefund({ type: BuildingType.HOUSE, level: 0, townHallLevel: 1 })).toEqual({
+      wood: 8,
+    });
+  });
+
+  it("el reembolso de una mejora es el coste de subir al nivel objetivo", () => {
+    expect(constructionRefund({ type: BuildingType.FARM, level: 1, townHallLevel: 1 })).toEqual({
+      wood: 24,
+    });
+  });
+
+  it("el reembolso del Ayuntamiento usa su tabla, no el nivel del edificio", () => {
+    expect(constructionRefund({ type: BuildingType.TOWN_HALL, level: 1, townHallLevel: 1 })).toEqual(
+      { wood: 55 },
+    );
+  });
+
+  it("la fecha límite es el inicio de la obra más la ventana de cancelación", () => {
+    // Casa: 120s de obra. Si termina en t=120s, empezó en t=0 → límite = 0 + ventana.
+    const endsAt = new Date(120 * 1000);
+    const deadline = cancelDeadlineMs({
+      type: BuildingType.HOUSE,
+      level: 0,
+      townHallLevel: 1,
+      endsAt,
+    });
+    expect(deadline).toBe(CONSTRUCTION_CANCEL_SECONDS * 1000);
   });
 });
 

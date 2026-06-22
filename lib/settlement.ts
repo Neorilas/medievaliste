@@ -16,6 +16,7 @@ import {
   PRODUCERS,
   TOWN_HALL,
   buildCost,
+  cancelDeadlineMs,
   constructionSeconds,
   maxWorkers,
   populationCapacity,
@@ -117,6 +118,7 @@ export interface BuildingView {
     endsAt: string; // ISO del instante en que termina
     totalSeconds: number; // duración total de esta obra (para barra de progreso)
     toLevel: number; // nivel que tendrá al terminar
+    cancelableUntil: string; // ISO del instante hasta el que se puede cancelar y recuperar el coste
   } | null;
 }
 
@@ -299,6 +301,14 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
             endsAt: b.constructionEndsAt.toISOString(),
             totalSeconds: constructionSeconds(b.type, b.level + 1),
             toLevel: b.level + 1,
+            cancelableUntil: new Date(
+              cancelDeadlineMs({
+                type: b.type,
+                level: b.level,
+                townHallLevel: s.townHallLevel,
+                endsAt: b.constructionEndsAt,
+              }),
+            ).toISOString(),
           }
         : null,
     };

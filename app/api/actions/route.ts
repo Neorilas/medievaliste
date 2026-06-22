@@ -33,6 +33,11 @@ function parseAction(body: unknown): Action | null {
         return { kind: "upgrade", buildingId: b.buildingId };
       }
       return null;
+    case "cancelConstruction":
+      if (typeof b.buildingId === "string") {
+        return { kind: "cancelConstruction", buildingId: b.buildingId };
+      }
+      return null;
     case "upgradeTownHall":
       return { kind: "upgradeTownHall" };
     default:

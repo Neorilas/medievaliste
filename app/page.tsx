@@ -81,7 +81,8 @@ type ActionBody =
   | { kind: "assign"; buildingId: string; workers: number }
   | { kind: "build"; buildingType: string }
   | { kind: "upgrade"; buildingId: string }
-  | { kind: "upgradeTownHall" };
+  | { kind: "upgradeTownHall" }
+  | { kind: "cancelConstruction"; buildingId: string };
 
 function fmt(n: number): string {
   return Math.floor(n).toLocaleString("es-ES");
@@ -660,21 +661,30 @@ function GameView({
               colonistAnchor={b.id === firstAssignableId}
               onAssign={(workers) => dispatch({ kind: "assign", buildingId: b.id, workers })}
               onUpgrade={() => dispatch({ kind: "upgrade", buildingId: b.id })}
+              onCancel={() => dispatch({ kind: "cancelConstruction", buildingId: b.id })}
             />
           ))}
       </section>
 
       {/* Subir Ayuntamiento */}
-      <TownHallCard
-        th={view.townHallUpgrade}
-        level={view.townHallLevel}
-        have={resources}
-        busy={busy}
-        nowMs={nowMs}
-        anchorRef={townHallAnchor}
-        construction={view.buildings.find((b) => b.type === "TOWN_HALL")?.construction ?? null}
-        onUpgrade={() => dispatch({ kind: "upgradeTownHall" })}
-      />
+      {(() => {
+        const townHall = view.buildings.find((b) => b.type === "TOWN_HALL");
+        return (
+          <TownHallCard
+            th={view.townHallUpgrade}
+            level={view.townHallLevel}
+            have={resources}
+            busy={busy}
+            nowMs={nowMs}
+            anchorRef={townHallAnchor}
+            construction={townHall?.construction ?? null}
+            onUpgrade={() => dispatch({ kind: "upgradeTownHall" })}
+            onCancel={
+              townHall ? () => dispatch({ kind: "cancelConstruction", buildingId: townHall.id }) : undefined
+            }
+          />
+        );
+      })()}
 
       {/* Construir */}
       <section ref={buildMenuAnchor} className="flex flex-col gap-2">
@@ -812,19 +822,27 @@ function ResourceCard({ icon, label, value, cap, rate }: { icon: string; label: 
 }
 
 // Barra de progreso de una obra en curso, con cuenta atrás del tiempo restante.
+// Si la obra aún está dentro de su ventana de cancelación, muestra un botón para
+// deshacerla y recuperar el coste (red de seguridad ante un clic por error).
 function ConstructionBar({
   construction,
   nowMs,
   label,
+  busy,
+  onCancel,
 }: {
   construction: NonNullable<BuildingView["construction"]>;
   nowMs: number;
   label: string;
+  busy?: boolean;
+  onCancel?: () => void;
 }) {
   const endMs = new Date(construction.endsAt).getTime();
   const remainingSec = Math.max(0, (endMs - nowMs) / 1000);
   const total = construction.totalSeconds;
   const progress = total > 0 ? Math.min(1, Math.max(0, (total - remainingSec) / total)) : 1;
+  const cancelRemaining = Math.max(0, (new Date(construction.cancelableUntil).getTime() - nowMs) / 1000);
+  const canCancel = !!onCancel && cancelRemaining > 0 && remainingSec > 0;
   return (
     <div className="mt-2">
       <div className="flex items-center justify-between text-xs text-amber-300">
@@ -839,6 +857,16 @@ function ConstructionBar({
           style={{ width: `${Math.round(progress * 100)}%` }}
         />
       </div>
+      {canCancel && (
+        <button
+          disabled={busy}
+          onClick={onCancel}
+          title="Deshace la obra y te devuelve el coste íntegro. Solo durante los primeros minutos."
+          className="mt-1.5 text-xs text-rose-400 hover:text-rose-300 disabled:opacity-50"
+        >
+          ✕ Cancelar obra · quedan {fmtDuration(cancelRemaining)}
+        </button>
+      )}
     </div>
   );
 }
@@ -852,6 +880,7 @@ function BuildingCard({
   colonistAnchor = false,
   onAssign,
   onUpgrade,
+  onCancel,
 }: {
   b: BuildingView;
   have: Held;
@@ -861,6 +890,7 @@ function BuildingCard({
   colonistAnchor?: boolean; // este edificio es el ancla del coachmark de colonos
   onAssign: (workers: number) => void;
   onUpgrade: () => void;
+  onCancel: () => void;
 }) {
   const isProducer = b.produces !== null;
   const isNew = b.level === 0; // construcción inicial (aún no funcional)
@@ -916,6 +946,8 @@ function BuildingCard({
           construction={b.construction}
           nowMs={nowMs}
           label={isNew ? "Construyendo" : `Mejorando a N${b.construction.toLevel}`}
+          busy={busy}
+          onCancel={onCancel}
         />
       )}
 
@@ -959,6 +991,7 @@ function TownHallCard({
   anchorRef,
   construction,
   onUpgrade,
+  onCancel,
 }: {
   th: TownHallUpgrade;
   level: number;
@@ -968,6 +1001,7 @@ function TownHallCard({
   anchorRef?: (el: HTMLElement | null) => void;
   construction: BuildingView["construction"];
   onUpgrade: () => void;
+  onCancel?: () => void;
 }) {
   return (
     <section ref={anchorRef} className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3">
@@ -977,7 +1011,13 @@ function TownHallCard({
       </div>
 
       {construction && (
-        <ConstructionBar construction={construction} nowMs={nowMs} label={`Mejorando a N${construction.toLevel}`} />
+        <ConstructionBar
+          construction={construction}
+          nowMs={nowMs}
+          label={`Mejorando a N${construction.toLevel}`}
+          busy={busy}
+          onCancel={onCancel}
+        />
       )}
 
       {!th.atMax && !construction && (

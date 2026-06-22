@@ -22,7 +22,8 @@ export type Action =
   | { kind: "assign"; buildingId: string; workers: number }
   | { kind: "build"; buildingType: BuildingType }
   | { kind: "upgrade"; buildingId: string }
-  | { kind: "upgradeTownHall" };
+  | { kind: "upgradeTownHall" }
+  | { kind: "cancelConstruction"; buildingId: string };
 
 export interface BuildingSnapshot {
   id: string;
@@ -162,6 +163,16 @@ function validateAssign(
   return ok(); // reasignar es gratis (§4)
 }
 
+// Validación ESTRUCTURAL de la cancelación: el edificio existe y tiene una obra en
+// curso. La ventana temporal de 5 min (que necesita el reloj y el timestamp de la
+// obra) la comprueba el aplicador de acciones, igual que el cooldown de renombre.
+function validateCancel(s: SettlementSnapshot, buildingId: string): ValidationResult {
+  const b = s.buildings.find((x) => x.id === buildingId);
+  if (!b) return fail("El edificio no existe.");
+  if (!b.constructing) return fail("Este edificio no tiene ninguna obra en curso.");
+  return ok();
+}
+
 /** Valida cualquier acción contra el estado actual. No muta nada. */
 export function validateAction(s: SettlementSnapshot, action: Action): ValidationResult {
   switch (action.kind) {
@@ -173,6 +184,8 @@ export function validateAction(s: SettlementSnapshot, action: Action): Validatio
       return validateUpgradeTownHall(s);
     case "assign":
       return validateAssign(s, action.buildingId, action.workers);
+    case "cancelConstruction":
+      return validateCancel(s, action.buildingId);
     default:
       return fail("Acción desconocida.");
   }

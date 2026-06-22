@@ -347,6 +347,51 @@ export function constructionSeconds(type: BuildingType, targetLevel: number): nu
   return Math.round(base * Math.pow(CONSTRUCTION.levelTimeFactor, Math.max(0, targetLevel - 1)));
 }
 
+// Ventana de cancelación de una obra recién encargada: segundos desde que se
+// ordenó durante los que el jugador puede DESHACERLA (p. ej. si pulsó por error
+// tras una confirmación) y recuperar el coste íntegro. Pasada la ventana, la obra
+// ya no puede cancelarse y sigue su curso normal hasta completarse.
+export const CONSTRUCTION_CANCEL_SECONDS = 5 * 60; // 5 min
+
+/**
+ * Una obra en curso, descrita lo justo para calcular su ventana de cancelación y
+ * su reembolso. `level` es el nivel ACTUAL del edificio (0 = construcción nueva, aún
+ * sin terminar); `townHallLevel` es el del Ayuntamiento del asentamiento.
+ */
+export interface ConstructionOrder {
+  type: BuildingType;
+  level: number;
+  townHallLevel: number;
+  endsAt: Date; // constructionEndsAt
+}
+
+/** Nivel objetivo de una obra (al que subirá al completarse). */
+function targetLevel(order: Pick<ConstructionOrder, "type" | "level" | "townHallLevel">): number {
+  // El Ayuntamiento usa el techo del asentamiento (su nivel de edificio va en paralelo);
+  // el resto sube desde su nivel actual.
+  return order.type === BuildingType.TOWN_HALL ? order.townHallLevel + 1 : order.level + 1;
+}
+
+/**
+ * Instante límite (epoch ms) hasta el que una obra puede cancelarse: el momento en
+ * que se encargó (`endsAt` menos su duración) más la ventana de cancelación.
+ */
+export function cancelDeadlineMs(order: ConstructionOrder): number {
+  const startedMs = order.endsAt.getTime() - constructionSeconds(order.type, targetLevel(order)) * 1000;
+  return startedMs + CONSTRUCTION_CANCEL_SECONDS * 1000;
+}
+
+/**
+ * Coste que se reembolsa al cancelar una obra: exactamente lo que se pagó al
+ * encargarla (construcción nueva, mejora de edificio o mejora del Ayuntamiento).
+ */
+export function constructionRefund(
+  order: Pick<ConstructionOrder, "type" | "level" | "townHallLevel">,
+): Partial<Record<Resource, number>> {
+  if (order.type === BuildingType.TOWN_HALL) return townHallUpgradeCost(order.townHallLevel + 1);
+  return order.level === 0 ? buildCost(order.type) : upgradeCost(order.type, order.level + 1);
+}
+
 // ----------------------------------------------------------------------------
 // Identidad del asentamiento: renombre.
 // El jugador puede renombrar su asentamiento, pero solo 1 vez cada 24h.

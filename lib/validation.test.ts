@@ -127,6 +127,25 @@ describe("upgradeTownHall", () => {
   });
 });
 
+describe("cancelConstruction", () => {
+  it("permite cancelar un edificio con una obra en curso", () => {
+    const s = snap();
+    s.buildings[1].constructing = true;
+    const r = validateAction(s, { kind: "cancelConstruction", buildingId: "farm" });
+    expect(r.ok).toBe(true);
+  });
+
+  it("rechaza cancelar un edificio sin obra en curso", () => {
+    const r = validateAction(snap(), { kind: "cancelConstruction", buildingId: "farm" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rechaza cancelar un edificio inexistente", () => {
+    const r = validateAction(snap(), { kind: "cancelConstruction", buildingId: "nope" });
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe("assign", () => {
   it("asigna colonos a un productor dentro de su tope", () => {
     const r = validateAction(snap(), { kind: "assign", buildingId: "farm", workers: 2 });

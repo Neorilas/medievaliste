@@ -15,7 +15,13 @@ import {
   type Cost,
   type SettlementSnapshot,
 } from "./validation";
-import { constructionSeconds } from "./gameConfig";
+import {
+  CONSTRUCTION_CANCEL_SECONDS,
+  cancelDeadlineMs,
+  constructionRefund,
+  constructionSeconds,
+  storageCap,
+} from "./gameConfig";
 import { BuildingType } from "./generated/prisma/enums";
 import { evaluateAchievements, type CompletedAchievement } from "./achievements";
 import { maybeActivateReferral } from "./referrals";
@@ -150,6 +156,50 @@ export async function applyAction(
           data: { workers: action.workers },
         });
         break; // reasignar es gratis
+      }
+      case "cancelConstruction": {
+        const b = settlement.buildings.find((x) => x.id === action.buildingId)!;
+        const order = {
+          type: b.type,
+          level: b.level,
+          townHallLevel: settlement.townHallLevel,
+          endsAt: b.constructionEndsAt!,
+        };
+        // Solo durante los primeros minutos desde que se encargó la obra (deshacer un
+        // clic por error). Pasada la ventana, ya no se puede cancelar.
+        if (now.getTime() > cancelDeadlineMs(order)) {
+          throw new ActionError(
+            `El plazo para cancelar esta obra (${CONSTRUCTION_CANCEL_SECONDS / 60} min) ya ha pasado.`,
+          );
+        }
+
+        // Reembolso íntegro de lo pagado, sin pasar del tope de almacén.
+        const refund = constructionRefund(order);
+        const cap = storageCap(
+          settlement.buildings
+            .filter((x) => x.type === BuildingType.WAREHOUSE)
+            .reduce((m, x) => Math.max(m, x.level), 0),
+        );
+        await tx.settlement.update({
+          where: { id: settlementId },
+          data: {
+            food: Math.min(cap, settlement.food + (refund.food ?? 0)),
+            wood: Math.min(cap, settlement.wood + (refund.wood ?? 0)),
+            stone: Math.min(cap, settlement.stone + (refund.stone ?? 0)),
+          },
+        });
+
+        if (b.level === 0 && b.type !== BuildingType.TOWN_HALL) {
+          // Construcción nueva: el edificio aún no existía de verdad → se elimina.
+          await tx.building.delete({ where: { id: b.id } });
+        } else {
+          // Mejora en curso: conserva su nivel actual y se libera la obra.
+          await tx.building.update({
+            where: { id: b.id },
+            data: { constructionEndsAt: null },
+          });
+        }
+        break;
       }
     }
 
