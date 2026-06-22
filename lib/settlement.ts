@@ -22,7 +22,9 @@ import {
   storageCap,
   townHallUpgradeCost,
   upgradeCost,
+  upgradePreview,
   CONSUMPTION,
+  type StatDelta,
 } from "./gameConfig";
 import { validateAction, type Cost, type SettlementSnapshot } from "./validation";
 import { BuildingType, Region } from "./generated/prisma/enums";
@@ -78,6 +80,8 @@ export interface UpgradeInfo {
   canUpgrade: boolean;
   reason?: string; // por qué no se puede (si canUpgrade es false)
   durationSeconds: number; // cuánto tardará la mejora
+  atMax: boolean; // ya está en el nivel máximo permitido (sin mejora posible)
+  preview: StatDelta[]; // qué stat cambia al subir de nivel (Cambio B2)
 }
 
 export interface BuildingView {
@@ -111,6 +115,7 @@ export interface TownHallUpgrade {
   canUpgrade: boolean;
   reason?: string;
   durationSeconds: number; // cuánto tardará la mejora
+  preview: StatDelta[]; // qué cambia al subir el Ayuntamiento (Cambio B2)
 }
 
 export interface SettlementView {
@@ -168,10 +173,11 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     },
   });
 
-  // Las casas aún en obra (level 0) no suben la capacidad todavía.
-  const houseCount = s.buildings.filter(
-    (b) => b.type === BuildingType.HOUSE && b.level >= 1,
-  ).length;
+  // Las casas aún en obra (level 0) no suben la capacidad todavía. Cada casa
+  // aporta techo según su nivel (Cambio B2), de ahí la lista de niveles.
+  const houseLevels = s.buildings
+    .filter((b) => b.type === BuildingType.HOUSE && b.level >= 1)
+    .map((b) => b.level);
   const bestWarehouse = s.buildings
     .filter((b) => b.type === BuildingType.WAREHOUSE)
     .reduce((m, b) => Math.max(m, b.level), 0);
@@ -199,11 +205,14 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     let upgrade: UpgradeInfo | null = null;
     if (b.type !== BuildingType.TOWN_HALL) {
       const res = validateAction(snapshot, { kind: "upgrade", buildingId: b.id });
+      const atMax = b.level >= tier.maxOtherLevel;
       upgrade = {
         cost: upgradeCost(b.type, b.level + 1),
         canUpgrade: res.ok,
         reason: res.error,
         durationSeconds: constructionSeconds(b.type, b.level + 1),
+        atMax,
+        preview: atMax ? [] : upgradePreview(b.type, b.level),
       };
     }
     return {
@@ -246,6 +255,7 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     durationSeconds: thAtMax
       ? 0
       : constructionSeconds(BuildingType.TOWN_HALL, s.townHallLevel + 1),
+    preview: thAtMax ? [] : upgradePreview(BuildingType.TOWN_HALL, s.townHallLevel),
   };
 
   const sumRate = (type: BuildingType) =>
@@ -280,7 +290,7 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     population: {
       total: s.population,
       free: s.population - assigned,
-      capacity: populationCapacity(houseCount),
+      capacity: populationCapacity(houseLevels),
     },
     rates: {
       food: sumRate(BuildingType.FARM) - foodConsumption,

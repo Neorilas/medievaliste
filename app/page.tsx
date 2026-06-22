@@ -17,6 +17,7 @@ import type {
   SettlementView,
   TownHallUpgrade,
 } from "@/lib/settlement";
+import type { StatDelta } from "@/lib/gameConfig";
 import type { ResolveSummary } from "@/lib/resolveSettlement";
 
 interface PlayerInfo {
@@ -52,6 +53,7 @@ const RESOURCE_ICON: Record<string, string> = {
 };
 
 type Cost = Partial<Record<"food" | "wood" | "stone", number>>;
+type Held = { food: number; wood: number; stone: number };
 type ActionBody =
   | { kind: "assign"; buildingId: string; workers: number }
   | { kind: "build"; buildingType: string }
@@ -74,12 +76,47 @@ function fmtDuration(seconds: number): string {
   return rm ? `${h}h ${rm}m` : `${h}h`;
 }
 
-function CostTag({ cost }: { cost: Cost }) {
-  const parts = (["wood", "stone", "food"] as const)
-    .filter((k) => (cost[k] ?? 0) > 0)
-    .map((k) => `${RESOURCE_ICON[k]} ${cost[k]}`);
-  if (parts.length === 0) return null;
-  return <span className="text-xs text-zinc-400">{parts.join("  ")}</span>;
+// Coste de una acción mostrado como `actual/necesario 🪵` (Cambio B1). Se muestran
+// TODOS los recursos requeridos; los que el jugador no alcanza salen en rojo.
+function ResourceCost({ cost, have }: { cost: Cost; have: Held }) {
+  const keys = (["wood", "stone", "food"] as const).filter((k) => (cost[k] ?? 0) > 0);
+  if (keys.length === 0) return <span className="text-xs text-zinc-500">Gratis</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+      {keys.map((k) => {
+        const need = cost[k]!;
+        const cur = Math.floor(have[k]);
+        const enough = cur >= need;
+        return (
+          <span
+            key={k}
+            className={`text-xs tabular-nums ${enough ? "text-emerald-400" : "text-rose-400"}`}
+            title={enough ? "Recurso cubierto" : `Te faltan ${need - cur} ${RESOURCE_ICON[k]}`}
+          >
+            {cur}/{need} {RESOURCE_ICON[k]}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// Preview del cambio de stats al subir un edificio de nivel (Cambio B2).
+function UpgradePreview({ preview }: { preview: StatDelta[] }) {
+  if (preview.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-0.5 rounded-md bg-zinc-800/40 px-2 py-1.5">
+      {preview.map((d) => (
+        <div key={d.label} className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-zinc-400">{d.label}</span>
+          <span className="tabular-nums text-zinc-300">
+            {d.from} <span className="text-zinc-500">→</span>{" "}
+            <span className="font-medium text-emerald-300">{d.to}</span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Nombre del asentamiento, editable inline (CAMBIO 1). 1 cambio cada 24h.
@@ -373,6 +410,7 @@ export default function Game() {
             <BuildingCard
               key={b.id}
               b={b}
+              have={resources}
               freeColonists={population.free}
               busy={busy}
               nowMs={nowMs}
@@ -386,6 +424,7 @@ export default function Game() {
       <TownHallCard
         th={view.townHallUpgrade}
         level={view.townHallLevel}
+        have={resources}
         busy={busy}
         nowMs={nowMs}
         construction={view.buildings.find((b) => b.type === "TOWN_HALL")?.construction ?? null}
@@ -399,7 +438,7 @@ export default function Game() {
         </h2>
         <div className="grid grid-cols-2 gap-2">
           {view.buildOptions.map((o) => (
-            <BuildOptionButton key={o.type} o={o} busy={busy} onBuild={() => dispatch({ kind: "build", buildingType: o.type })} />
+            <BuildOptionButton key={o.type} o={o} have={resources} busy={busy} onBuild={() => dispatch({ kind: "build", buildingType: o.type })} />
           ))}
         </div>
       </section>
@@ -459,6 +498,7 @@ function ConstructionBar({
 
 function BuildingCard({
   b,
+  have,
   freeColonists,
   busy,
   nowMs,
@@ -466,6 +506,7 @@ function BuildingCard({
   onUpgrade,
 }: {
   b: BuildingView;
+  have: Held;
   freeColonists: number;
   busy: boolean;
   nowMs: number;
@@ -529,17 +570,30 @@ function BuildingCard({
 
       {/* Mejorar (oculto mientras hay obra en curso) */}
       {b.upgrade && !b.construction && (
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <CostTag cost={b.upgrade.cost} />
-          <button
-            disabled={busy || !b.upgrade.canUpgrade}
-            onClick={onUpgrade}
-            title={b.upgrade.canUpgrade ? `Tarda ${fmtDuration(b.upgrade.durationSeconds)}` : b.upgrade.reason}
-            className="rounded bg-indigo-600 px-3 py-1 text-sm font-medium disabled:bg-zinc-800 disabled:text-zinc-500"
-          >
-            Mejorar a N{b.level + 1} · ⏱ {fmtDuration(b.upgrade.durationSeconds)}
-          </button>
-        </div>
+        b.upgrade.atMax ? (
+          <p className="mt-2 text-xs text-zinc-500">✦ Nivel máximo alcanzado</p>
+        ) : (
+          <div className="mt-3 border-t border-zinc-800 pt-2">
+            <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-zinc-500">
+              <span>Mejora a N{b.level + 1}</span>
+            </div>
+            <UpgradePreview preview={b.upgrade.preview} />
+            <div className="mt-2 flex items-end justify-between gap-2">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] text-zinc-500">Coste</span>
+                <ResourceCost cost={b.upgrade.cost} have={have} />
+              </div>
+              <button
+                disabled={busy || !b.upgrade.canUpgrade}
+                onClick={onUpgrade}
+                title={b.upgrade.canUpgrade ? `Tarda ${fmtDuration(b.upgrade.durationSeconds)}` : b.upgrade.reason}
+                className="shrink-0 rounded bg-indigo-600 px-3 py-1 text-sm font-medium disabled:bg-zinc-800 disabled:text-zinc-500"
+              >
+                Mejorar · ⏱ {fmtDuration(b.upgrade.durationSeconds)}
+              </button>
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -548,6 +602,7 @@ function BuildingCard({
 function TownHallCard({
   th,
   level,
+  have,
   busy,
   nowMs,
   construction,
@@ -555,6 +610,7 @@ function TownHallCard({
 }: {
   th: TownHallUpgrade;
   level: number;
+  have: Held;
   busy: boolean;
   nowMs: number;
   construction: BuildingView["construction"];
@@ -564,47 +620,54 @@ function TownHallCard({
     <section className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3">
       <div className="flex items-center justify-between">
         <span className="font-medium">{BUILDING_ICON.TOWN_HALL} Ayuntamiento N{level}</span>
-        {th.atMax ? (
-          <span className="text-xs text-zinc-500">Nivel máximo</span>
-        ) : (
-          !construction && (
-            <div className="flex items-center gap-2">
-              <CostTag cost={th.cost} />
-              <button
-                disabled={busy || !th.canUpgrade}
-                onClick={onUpgrade}
-                title={th.canUpgrade ? `Tarda ${fmtDuration(th.durationSeconds)}` : th.reason}
-                className="rounded bg-amber-600 px-3 py-1 text-sm font-medium text-black disabled:bg-zinc-800 disabled:text-zinc-500"
-              >
-                Subir a N{level + 1} · ⏱ {fmtDuration(th.durationSeconds)}
-              </button>
-            </div>
-          )
-        )}
+        {th.atMax && <span className="text-xs text-zinc-500">✦ Nivel máximo alcanzado</span>}
       </div>
+
       {construction && (
         <ConstructionBar construction={construction} nowMs={nowMs} label={`Mejorando a N${construction.toLevel}`} />
       )}
-      <p className="mt-1 text-xs text-zinc-400">Sube el techo de edificios y de nivel. La progresión del asentamiento.</p>
+
+      {!th.atMax && !construction && (
+        <div className="mt-3 border-t border-amber-900/40 pt-2">
+          <span className="text-[11px] uppercase tracking-wide text-amber-200/70">Subir a N{level + 1}</span>
+          <UpgradePreview preview={th.preview} />
+          <div className="mt-2 flex items-end justify-between gap-2">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-zinc-500">Coste</span>
+              <ResourceCost cost={th.cost} have={have} />
+            </div>
+            <button
+              disabled={busy || !th.canUpgrade}
+              onClick={onUpgrade}
+              title={th.canUpgrade ? `Tarda ${fmtDuration(th.durationSeconds)}` : th.reason}
+              className="shrink-0 rounded bg-amber-600 px-3 py-1 text-sm font-medium text-black disabled:bg-zinc-800 disabled:text-zinc-500"
+            >
+              Subir · ⏱ {fmtDuration(th.durationSeconds)}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <p className="mt-2 text-xs text-zinc-400">Sube el techo de edificios y de nivel. La progresión del asentamiento.</p>
     </section>
   );
 }
 
-function BuildOptionButton({ o, busy, onBuild }: { o: BuildOption; busy: boolean; onBuild: () => void }) {
+function BuildOptionButton({ o, have, busy, onBuild }: { o: BuildOption; have: Held; busy: boolean; onBuild: () => void }) {
   return (
     <button
       disabled={busy || !o.canBuild}
       onClick={onBuild}
       title={o.canBuild ? `Tarda ${fmtDuration(o.durationSeconds)}` : o.reason}
-      className="flex flex-col items-start gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-left disabled:opacity-40"
+      className="flex flex-col items-start gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-left disabled:opacity-40"
     >
-      <span className="text-sm font-medium">
-        {BUILDING_ICON[o.type]} {BUILDING_LABEL[o.type]}
-      </span>
       <div className="flex w-full items-center justify-between gap-2">
-        <CostTag cost={o.cost} />
+        <span className="text-sm font-medium">
+          {BUILDING_ICON[o.type]} {BUILDING_LABEL[o.type]}
+        </span>
         <span className="text-xs text-amber-400/80">⏱ {fmtDuration(o.durationSeconds)}</span>
       </div>
+      <ResourceCost cost={o.cost} have={have} />
     </button>
   );
 }

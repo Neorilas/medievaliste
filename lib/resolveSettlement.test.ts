@@ -63,9 +63,10 @@ describe("helpers de capacidad", () => {
     expect(storageCap(3)).toBe(350);
   });
 
-  it("populationCapacity: base 3, +2 por casa", () => {
-    expect(populationCapacity(0)).toBe(3);
-    expect(populationCapacity(2)).toBe(7);
+  it("populationCapacity: base 3, +2·nivel por casa", () => {
+    expect(populationCapacity([])).toBe(3);
+    expect(populationCapacity([1, 1])).toBe(7); // dos casas N1: +2 cada una
+    expect(populationCapacity([2, 1])).toBe(9); // casa N2 (+4) + casa N1 (+2)
   });
 });
 

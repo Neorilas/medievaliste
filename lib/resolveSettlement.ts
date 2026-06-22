@@ -103,9 +103,9 @@ function bestWarehouseLevel(buildings: SimBuilding[]): number {
   return best;
 }
 
-/** Número de casas construidas (las que aún están levantándose, level 0, no cuentan). */
-function houseCount(buildings: SimBuilding[]): number {
-  return buildings.filter((b) => b.type === BuildingType.HOUSE && b.level >= 1).length;
+/** Niveles de las casas construidas (las que aún están levantándose, level 0, no cuentan). */
+function houseLevels(buildings: SimBuilding[]): number[] {
+  return buildings.filter((b) => b.type === BuildingType.HOUSE && b.level >= 1).map((b) => b.level);
 }
 
 /** Producción/hora agregada de un recurso concreto, sumando todos los edificios. */
@@ -261,7 +261,7 @@ export function simulate(
 
     // --- Crecimiento de población (§4) ---
     // Solo cuenta tiempo ELEGIBLE: vivienda libre Y superávit de comida Y bienestar alto.
-    const capacity = populationCapacity(houseCount(state.buildings));
+    const capacity = populationCapacity(houseLevels(state.buildings));
     const hasRoom = state.population < capacity;
     const foodSurplus = foodRate > state.population * CONSUMPTION.foodPerColonistPerHour;
     const welfareOk = state.welfare > POPULATION.growthWelfareThreshold;

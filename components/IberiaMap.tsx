@@ -31,12 +31,23 @@ const LABEL_POS: Partial<Record<Region, [number, number]>> = {
   [Region.BAETICA]: [468, 545],
 };
 
+// Anclas para la bandera "aquí estás" de la región de origen (Cambio B3). Para
+// el continente coinciden con las etiquetas; las islas tienen ancla propia.
+const FLAG_POS: Partial<Record<Region, [number, number]>> = {
+  ...LABEL_POS,
+  [Region.INSULAE_BALEARES]: [862, 375],
+  [Region.INSULAE_FORTUNATAE]: [235, 668],
+};
+
 export function IberiaMap({
   selected,
   onSelect,
+  homeRegion = null,
 }: {
   selected: Region | null;
   onSelect: (r: Region) => void;
+  // Si se indica, dibuja una bandera "aquí estás" sobre esa región (vista global B3).
+  homeRegion?: Region | null;
 }) {
   function regionProps(r: Region) {
     const info = REGIONS[r];
@@ -145,6 +156,19 @@ export function IberiaMap({
           Insulae Fortunatae
         </text>
       </g>
+
+      {/* Bandera "aquí estás" sobre la región de origen (vista global, Cambio B3) */}
+      {homeRegion && FLAG_POS[homeRegion] && (
+        <text
+          x={FLAG_POS[homeRegion]![0]}
+          y={FLAG_POS[homeRegion]![1] - 20}
+          textAnchor="middle"
+          className="pointer-events-none select-none"
+          fontSize="26"
+        >
+          🚩
+        </text>
+      )}
     </svg>
   );
 }

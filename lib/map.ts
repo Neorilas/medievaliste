@@ -21,16 +21,29 @@ export interface RegionMapView {
   region: Region;
   regionName: string;
   regionColor: string;
+  // true si es la región del propio jugador (la única con marcador "aquí estás"
+  // y asentamiento propio clicable). false al explorar regiones ajenas (B3).
+  isOwnRegion: boolean;
+  // Región a la que pertenece el jugador (para resaltarla en la vista global).
+  playerRegion: Region;
   self: (MapMarker & { id: string }) | null;
   players: MapMarker[]; // otros jugadores de la región
   neutrals: MapMarker[];
 }
 
 /**
- * Arma el mapa de la región del asentamiento dado. Devuelve null si el
- * asentamiento aún no tiene región (onboarding pendiente).
+ * Arma el tablero de una región (Cambio B3: cualquier región es explorable, no
+ * solo la propia). Sin `regionOverride` usa la región del jugador. Devuelve null
+ * si el jugador aún no tiene región (onboarding pendiente).
+ *
+ * El asentamiento propio y el marcador "aquí estás" solo aparecen en la región
+ * del jugador; en regiones ajenas se ven los neutrales (y otros jugadores), nunca
+ * datos de producción (misma política de privacidad del Cambio 4).
  */
-export async function getRegionMap(settlementId: string): Promise<RegionMapView | null> {
+export async function getRegionMap(
+  settlementId: string,
+  regionOverride?: Region,
+): Promise<RegionMapView | null> {
   const { prisma } = await import("./prisma");
 
   const me = await prisma.settlement.findUniqueOrThrow({
@@ -38,7 +51,8 @@ export async function getRegionMap(settlementId: string): Promise<RegionMapView 
     select: { id: true, name: true, townHallLevel: true, region: true, posX: true, posY: true },
   });
   if (!me.region) return null;
-  const region = me.region;
+  const region = regionOverride ?? me.region;
+  const isOwnRegion = region === me.region;
 
   // Idempotente: garantiza que la región tenga su tablero de neutrales.
   await ensureRegionNeutrals(region);
@@ -58,8 +72,10 @@ export async function getRegionMap(settlementId: string): Promise<RegionMapView 
     region,
     regionName: REGIONS[region].name,
     regionColor: REGIONS[region].color,
+    isOwnRegion,
+    playerRegion: me.region,
     self:
-      me.posX !== null && me.posY !== null
+      isOwnRegion && me.posX !== null && me.posY !== null
         ? { id: me.id, name: me.name, level: me.townHallLevel, posX: me.posX, posY: me.posY }
         : null,
     players: others.map((o) => ({

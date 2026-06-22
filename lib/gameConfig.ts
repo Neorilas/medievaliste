@@ -164,16 +164,23 @@ export const WELFARE_MAX = 100;
 // ----------------------------------------------------------------------------
 export const POPULATION = {
   baseCapacity: 3, // capacidad sin casas
-  capacityPerHouse: 2, // cada Casa: +2 colonos de techo
+  // Cada Casa habilita `capacityPerHouse * nivel` colonos: una Casa N1 da +2,
+  // N2 da +4, N3 da +6. Así MEJORAR una Casa tiene un efecto tangible (Cambio B2).
+  capacityPerHouse: 2,
   // Crecimiento: +1 colono cada 24h de tiempo ELEGIBLE acumulado.
   hoursPerColonist: 24,
   // El bienestar debe estar por encima de este umbral para que crezca la población.
   growthWelfareThreshold: 70,
 } as const;
 
+/** Colonos que habilita una Casa según su nivel (0 si aún está en obra). */
+export function houseCapacity(level: number): number {
+  return level >= 1 ? level * POPULATION.capacityPerHouse : 0;
+}
+
 /** Capacidad de población dada por las casas (sin contar el techo del Ayuntamiento). */
-export function populationCapacity(houseCount: number): number {
-  return POPULATION.baseCapacity + houseCount * POPULATION.capacityPerHouse;
+export function populationCapacity(houseLevels: number[]): number {
+  return POPULATION.baseCapacity + houseLevels.reduce((a, lvl) => a + houseCapacity(lvl), 0);
 }
 
 // ----------------------------------------------------------------------------
@@ -324,3 +331,69 @@ export const PLAGUE = {
   // Drenaje extra de bienestar/hora mientras una plaga está activa.
   welfareDrainPerHour: 5,
 } as const;
+
+// ----------------------------------------------------------------------------
+// Preview de mejora (Cambio B2): qué stat relevante cambia al subir de nivel.
+// Devuelve SOLO el delta que importa de cada edificio (menos es más), como
+// pares "valor actual → valor siguiente nivel". El cliente solo lo pinta.
+// ----------------------------------------------------------------------------
+export interface StatDelta {
+  label: string;
+  from: number;
+  to: number;
+}
+
+const RESOURCE_NOUN: Record<Resource, string> = {
+  food: "comida",
+  wood: "madera",
+  stone: "piedra",
+  welfare: "bienestar",
+};
+
+/**
+ * Resumen del cambio de stats de un edificio al pasar de `currentLevel` al
+ * siguiente. Lista vacía si el edificio no gana nada medible (o no procede).
+ */
+export function upgradePreview(type: BuildingType, currentLevel: number): StatDelta[] {
+  const next = currentLevel + 1;
+
+  // Productores: producción máxima/h (con todos los puestos del nivel ocupados).
+  const producer = PRODUCERS[type];
+  if (producer) {
+    return [
+      {
+        label: `Producción de ${RESOURCE_NOUN[producer.resource]} (máx/h)`,
+        from: Math.round(productionPerHour(type, currentLevel, maxWorkers(type, currentLevel))),
+        to: Math.round(productionPerHour(type, next, maxWorkers(type, next))),
+      },
+    ];
+  }
+
+  if (type === BuildingType.HOUSE) {
+    return [
+      { label: "Habitantes habilitados", from: houseCapacity(currentLevel), to: houseCapacity(next) },
+    ];
+  }
+
+  if (type === BuildingType.WAREHOUSE) {
+    return [
+      { label: "Capacidad de almacén", from: storageCap(currentLevel), to: storageCap(next) },
+    ];
+  }
+
+  if (type === BuildingType.TOWN_HALL) {
+    const cur = TOWN_HALL[currentLevel];
+    const nxt = TOWN_HALL[next];
+    if (!cur || !nxt) return [];
+    const out: StatDelta[] = [];
+    if (nxt.maxBuildings !== cur.maxBuildings) {
+      out.push({ label: "Edificios máximos", from: cur.maxBuildings, to: nxt.maxBuildings });
+    }
+    if (nxt.maxOtherLevel !== cur.maxOtherLevel) {
+      out.push({ label: "Nivel máx. de edificios", from: cur.maxOtherLevel, to: nxt.maxOtherLevel });
+    }
+    return out;
+  }
+
+  return [];
+}

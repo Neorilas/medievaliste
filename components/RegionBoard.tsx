@@ -5,6 +5,7 @@
 // neutrales (NPC). En v1 solo son visibles, no interactuables.
 
 import { useState } from "react";
+import Link from "next/link";
 import type { RegionMapView, MapMarker } from "@/lib/map";
 
 type Kind = "self" | "player" | "neutral";
@@ -76,10 +77,15 @@ export function RegionBoard({ map }: { map: RegionMapView }) {
 
       {/* Leyenda */}
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
-        <Legend color={map.regionColor} label="Tu asentamiento" ring />
+        {map.self && <Legend color={map.regionColor} label="Tu asentamiento" ring />}
         <Legend color="#818cf8" label={`Otros jugadores (${map.players.length})`} />
         <Legend color="#71717a" label={`Neutrales (${map.neutrals.length})`} />
       </div>
+      {!map.isOwnRegion && (
+        <p className="mt-2 text-xs text-zinc-500">
+          🔭 Estás explorando una región ajena. Aquí no tienes asentamiento.
+        </p>
+      )}
 
       {/* Detalle del marcador activo */}
       {active && (
@@ -100,6 +106,14 @@ export function RegionBoard({ map }: { map: RegionMapView }) {
           )}
           {active.kind === "player" && (
             <p className="mt-1 text-xs text-zinc-500">Otro colono de tu región.</p>
+          )}
+          {active.kind === "self" && (
+            <Link
+              href="/"
+              className="mt-2 inline-block rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+            >
+              Gestionar asentamiento →
+            </Link>
           )}
         </div>
       )}
