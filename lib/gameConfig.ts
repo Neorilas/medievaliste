@@ -108,7 +108,7 @@ export const PRODUCERS: Partial<Record<BuildingType, ProducerConfig>> = {
 /** Nº máximo de colonos que un edificio puede emplear útilmente a este nivel. */
 export function maxWorkers(type: BuildingType, level: number): number {
   const cfg = PRODUCERS[type];
-  if (!cfg) return 0;
+  if (!cfg || level < 1) return 0; // level 0 = aún en construcción, no admite colonos
   return cfg.marginalsL1.length + (level - 1) * cfg.extraWorkerSlotsPerLevel;
 }
 
@@ -261,6 +261,50 @@ export function townHallUpgradeCost(
   targetLevel: number,
 ): Partial<Record<Resource, number>> {
   return TOWN_HALL[targetLevel]?.upgradeCost ?? {};
+}
+
+// ----------------------------------------------------------------------------
+// Tiempo de construcción y mejora (§ nuevo): los edificios NO son instantáneos.
+// A mayor nivel objetivo, más tiempo. El motor diferido (resolveSettlement) los
+// completa al cruzar el timestamp `constructionEndsAt`; mientras tanto un edificio
+// nuevo (nivel 0) no produce y una mejora sigue produciendo a su nivel actual.
+//
+// ⚠️ VALORES DE PARTIDA, a calibrar jugando. En minutos para que se note sin
+// frustrar al ritmo de ~2 visitas/día del diseño.
+// ----------------------------------------------------------------------------
+export const CONSTRUCTION = {
+  // Segundos para CONSTRUIR cada tipo (llegar a nivel 1).
+  baseSecondsByType: {
+    [BuildingType.HOUSE]: 120, // 2 min
+    [BuildingType.FARM]: 180, // 3 min
+    [BuildingType.SAWMILL]: 180,
+    [BuildingType.QUARRY]: 240, // 4 min
+    [BuildingType.WAREHOUSE]: 240,
+    [BuildingType.PLAZA]: 180,
+  } as Partial<Record<BuildingType, number>>,
+  // Tiempo base si un tipo no está en la tabla.
+  fallbackBaseSeconds: 180,
+  // Cada nivel objetivo por encima de 1 multiplica el tiempo por este factor.
+  // L1=base, L2=base*1.8, L3=base*3.24, L4=base*5.83 …
+  levelTimeFactor: 1.8,
+  // Ayuntamiento: el limitador maestro, deliberadamente más lento.
+  townHallSecondsByLevel: {
+    2: 600, // 10 min
+    3: 1800, // 30 min
+  } as Record<number, number>,
+  townHallFallbackSeconds: 1800,
+} as const;
+
+/**
+ * Segundos que tarda en construirse/mejorarse un edificio hasta `targetLevel`.
+ * `targetLevel === 1` es construir uno nuevo; >1 es mejorar a ese nivel.
+ */
+export function constructionSeconds(type: BuildingType, targetLevel: number): number {
+  if (type === BuildingType.TOWN_HALL) {
+    return CONSTRUCTION.townHallSecondsByLevel[targetLevel] ?? CONSTRUCTION.townHallFallbackSeconds;
+  }
+  const base = CONSTRUCTION.baseSecondsByType[type] ?? CONSTRUCTION.fallbackBaseSeconds;
+  return Math.round(base * Math.pow(CONSTRUCTION.levelTimeFactor, Math.max(0, targetLevel - 1)));
 }
 
 // ----------------------------------------------------------------------------

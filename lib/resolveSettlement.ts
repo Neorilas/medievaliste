@@ -42,6 +42,10 @@ export interface SimBuilding {
   type: BuildingType;
   level: number;
   workers: number;
+  // Obra en curso: si no es null/undefined, el edificio sube a `level + 1` en este
+  // instante. Nivel 0 = edificio nuevo aún sin terminar (no produce ni cuenta).
+  // Opcional para que los estados de prueba sin obras no tengan que declararlo.
+  constructionEndsAt?: Date | null;
 }
 
 export interface SimSettlement {
@@ -76,6 +80,7 @@ export interface ResolveSummary {
   populationDelta: number;
   colonistsArrived: number;
   colonistsLost: number;
+  buildingsCompleted: number; // obras (construcciones/mejoras) terminadas en el tramo
   plagueActive: boolean;
 }
 
@@ -98,9 +103,9 @@ function bestWarehouseLevel(buildings: SimBuilding[]): number {
   return best;
 }
 
-/** Número de casas construidas. */
+/** Número de casas construidas (las que aún están levantándose, level 0, no cuentan). */
 function houseCount(buildings: SimBuilding[]): number {
-  return buildings.filter((b) => b.type === BuildingType.HOUSE).length;
+  return buildings.filter((b) => b.type === BuildingType.HOUSE && b.level >= 1).length;
 }
 
 /** Producción/hora agregada de un recurso concreto, sumando todos los edificios. */
@@ -156,6 +161,21 @@ export function simulate(
   const newEvents: NewEvent[] = [];
   let colonistsArrived = 0;
   let colonistsLost = 0;
+  let buildingsCompleted = 0;
+
+  // Completa las obras cuyo `constructionEndsAt` ya pasó en el instante `atMs`:
+  // sube el edificio a `level + 1` (0→1 si era nuevo) y libera la obra. Si es el
+  // Ayuntamiento, sube también el techo global del asentamiento.
+  const completeConstructionsDue = (atMs: number): void => {
+    for (const b of state.buildings) {
+      if (b.constructionEndsAt && b.constructionEndsAt.getTime() <= atMs + 1e-6) {
+        b.level += 1;
+        b.constructionEndsAt = null;
+        buildingsCompleted += 1;
+        if (b.type === BuildingType.TOWN_HALL) state.townHallLevel += 1;
+      }
+    }
+  };
 
   const start = {
     food: state.food,
@@ -177,7 +197,19 @@ export function simulate(
   let cursor = lastTick.getTime();
 
   while (remainingHours > 1e-9) {
-    const h = Math.min(STEP_HOURS, remainingHours);
+    // Completa las obras terminadas justo antes de este tramo: cambian las tasas
+    // (una granja nueva empieza a producir, una mejora rinde más) para el resto.
+    completeConstructionsDue(cursor);
+
+    // Tamaño del paso: como mucho STEP_HOURS y lo que reste, pero acortándolo para
+    // caer EXACTO sobre la próxima obra que termine (así el tramo usa la config
+    // correcta a ambos lados del corte, igual de fino que el resto del motor).
+    let h = Math.min(STEP_HOURS, remainingHours);
+    for (const b of state.buildings) {
+      if (!b.constructionEndsAt) continue;
+      const hToEnd = (b.constructionEndsAt.getTime() - cursor) / MS_PER_HOUR;
+      if (hToEnd > 1e-9 && hToEnd < h) h = hToEnd;
+    }
     const cap = storageCap(bestWarehouseLevel(state.buildings));
     const plagueOn = plagueActiveAt(activePlagues, new Date(cursor));
     if (plagueOn) plagueSeen = true;
@@ -252,6 +284,10 @@ export function simulate(
     cursor += h * MS_PER_HOUR;
   }
 
+  // Cierre: completa lo que termine exactamente en `now` (el bucle solo completa
+  // al INICIO de cada tramo), para que la vista lo muestre ya terminado.
+  completeConstructionsDue(now.getTime());
+
   const summary: ResolveSummary = {
     elapsedHours,
     food: state.food - start.food,
@@ -261,6 +297,7 @@ export function simulate(
     populationDelta: state.population - start.population,
     colonistsArrived,
     colonistsLost,
+    buildingsCompleted,
     plagueActive: plagueSeen,
   };
 
@@ -308,6 +345,7 @@ export async function resolveWithinTx(
     type: b.type,
     level: b.level,
     workers: b.workers,
+    constructionEndsAt: b.constructionEndsAt,
   }));
 
   const input: SimSettlement = {
@@ -327,6 +365,8 @@ export async function resolveWithinTx(
   await tx.settlement.update({
     where: { id: settlementId },
     data: {
+      // El Ayuntamiento puede haber subido de nivel al completarse su mejora.
+      townHallLevel: state.townHallLevel,
       food: state.food,
       wood: state.wood,
       stone: state.stone,
@@ -338,14 +378,26 @@ export async function resolveWithinTx(
     },
   });
 
-  // Persistir cambios de trabajadores (la hambruna puede haber retirado colonos).
+  // Persistir cambios por edificio: la hambruna puede retirar colonos y las obras
+  // terminadas suben el nivel y liberan `constructionEndsAt`.
   for (let i = 0; i < settlement.buildings.length; i++) {
     const dbBuilding = settlement.buildings[i];
     const simBuilding = state.buildings[i];
-    if (simBuilding && simBuilding.workers !== dbBuilding.workers) {
+    if (!simBuilding) continue;
+    const dbEnds = dbBuilding.constructionEndsAt?.getTime() ?? null;
+    const simEnds = simBuilding.constructionEndsAt?.getTime() ?? null;
+    const changed =
+      simBuilding.workers !== dbBuilding.workers ||
+      simBuilding.level !== dbBuilding.level ||
+      simEnds !== dbEnds;
+    if (changed) {
       await tx.building.update({
         where: { id: dbBuilding.id },
-        data: { workers: simBuilding.workers },
+        data: {
+          workers: simBuilding.workers,
+          level: simBuilding.level,
+          constructionEndsAt: simBuilding.constructionEndsAt,
+        },
       });
     }
   }

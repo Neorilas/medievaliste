@@ -29,6 +29,7 @@ export interface BuildingSnapshot {
   type: BuildingType;
   level: number;
   workers: number;
+  constructing?: boolean; // hay una construcción/mejora en curso sobre este edificio
 }
 
 export interface SettlementSnapshot {
@@ -105,6 +106,7 @@ function validateUpgrade(s: SettlementSnapshot, buildingId: string): ValidationR
   if (b.type === BuildingType.TOWN_HALL) {
     return fail("Usa la acción de subir Ayuntamiento.");
   }
+  if (b.constructing) return fail("Ya hay una obra en curso en este edificio.");
   const tier = TOWN_HALL[s.townHallLevel];
   if (!tier) return fail("Nivel de Ayuntamiento desconocido.");
 
@@ -120,6 +122,8 @@ function validateUpgrade(s: SettlementSnapshot, buildingId: string): ValidationR
 }
 
 function validateUpgradeTownHall(s: SettlementSnapshot): ValidationResult {
+  const th = s.buildings.find((x) => x.type === BuildingType.TOWN_HALL);
+  if (th?.constructing) return fail("El Ayuntamiento ya está mejorándose.");
   const targetLevel = s.townHallLevel + 1;
   if (targetLevel > MAX_TOWN_HALL_LEVEL) {
     return fail("El Ayuntamiento ya está al nivel máximo.");

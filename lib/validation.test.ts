@@ -97,6 +97,13 @@ describe("upgrade", () => {
     const r = validateAction(s, { kind: "upgrade", buildingId: "farm" });
     expect(r.ok).toBe(false);
   });
+
+  it("rechaza mejorar un edificio que ya tiene una obra en curso", () => {
+    const s = snap();
+    s.buildings[1].constructing = true;
+    const r = validateAction(s, { kind: "upgrade", buildingId: "farm" });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe("upgradeTownHall", () => {
@@ -108,6 +115,13 @@ describe("upgradeTownHall", () => {
 
   it("rechaza sin recursos", () => {
     const r = validateAction(snap({ wood: 50, stone: 10 }), { kind: "upgradeTownHall" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rechaza si el Ayuntamiento ya se está mejorando", () => {
+    const s = snap({ wood: 200, stone: 100 });
+    s.buildings[0].constructing = true; // el Ayuntamiento
+    const r = validateAction(s, { kind: "upgradeTownHall" });
     expect(r.ok).toBe(false);
   });
 });

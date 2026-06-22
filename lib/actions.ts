@@ -15,6 +15,7 @@ import {
   type Cost,
   type SettlementSnapshot,
 } from "./validation";
+import { constructionSeconds } from "./gameConfig";
 import { BuildingType } from "./generated/prisma/enums";
 
 export class ActionError extends Error {}
@@ -29,7 +30,13 @@ function buildSnapshot(settlement: {
   wood: number;
   stone: number;
   population: number;
-  buildings: { id: string; type: BuildingType; level: number; workers: number }[];
+  buildings: {
+    id: string;
+    type: BuildingType;
+    level: number;
+    workers: number;
+    constructionEndsAt: Date | null;
+  }[];
 }): SettlementSnapshot {
   return {
     townHallLevel: settlement.townHallLevel,
@@ -42,6 +49,7 @@ function buildSnapshot(settlement: {
       type: b.type,
       level: b.level,
       workers: b.workers,
+      constructing: b.constructionEndsAt !== null,
     })),
   };
 }
@@ -79,15 +87,23 @@ export async function applyAction(
       throw new ActionError(result.error ?? "Acción no válida.");
     }
 
+    // Instante en que terminará una obra encargada ahora.
+    const endsAt = (type: BuildingType, targetLevel: number) =>
+      new Date(now.getTime() + constructionSeconds(type, targetLevel) * 1000);
+
     // 3. Aplicar el cambio + descontar coste.
+    // Las obras NO son instantáneas: se descuenta el coste ahora y el edificio
+    // queda "en obra" (constructionEndsAt). El motor diferido lo completa al
+    // cruzar ese instante (sube a level+1; 0→1 si es nuevo).
     switch (action.kind) {
       case "build": {
         await tx.building.create({
           data: {
             settlementId,
             type: action.buildingType,
-            level: 1,
+            level: 0, // aún no funcional: sube a 1 al terminar la obra
             workers: 0,
+            constructionEndsAt: endsAt(action.buildingType, 1),
           },
         });
         await tx.settlement.update({
@@ -98,9 +114,10 @@ export async function applyAction(
       }
       case "upgrade": {
         const b = settlement.buildings.find((x) => x.id === action.buildingId)!;
+        // Sigue produciendo a su nivel actual hasta que la mejora termine.
         await tx.building.update({
           where: { id: b.id },
-          data: { level: b.level + 1 },
+          data: { constructionEndsAt: endsAt(b.type, b.level + 1) },
         });
         await tx.settlement.update({
           where: { id: settlementId },
@@ -109,21 +126,18 @@ export async function applyAction(
         break;
       }
       case "upgradeTownHall": {
-        await tx.settlement.update({
-          where: { id: settlementId },
-          data: {
-            townHallLevel: settlement.townHallLevel + 1,
-            ...spendData(result.cost),
-          },
-        });
-        // El nivel del Ayuntamiento como edificio acompaña al del asentamiento.
+        // El techo global NO sube hasta que la obra termine (lo hace el motor).
         const th = settlement.buildings.find((x) => x.type === BuildingType.TOWN_HALL);
         if (th) {
           await tx.building.update({
             where: { id: th.id },
-            data: { level: settlement.townHallLevel + 1 },
+            data: { constructionEndsAt: endsAt(BuildingType.TOWN_HALL, settlement.townHallLevel + 1) },
           });
         }
+        await tx.settlement.update({
+          where: { id: settlementId },
+          data: spendData(result.cost),
+        });
         break;
       }
       case "assign": {

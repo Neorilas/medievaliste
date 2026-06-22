@@ -61,6 +61,18 @@ function fmt(n: number): string {
   return Math.floor(n).toLocaleString("es-ES");
 }
 
+// Formatea una duración en segundos de forma compacta: "45s", "3m", "1h 20m".
+function fmtDuration(seconds: number): string {
+  const s = Math.max(0, Math.ceil(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
+}
+
 function CostTag({ cost }: { cost: Cost }) {
   const parts = (["wood", "stone", "food"] as const)
     .filter((k) => (cost[k] ?? 0) > 0)
@@ -76,22 +88,29 @@ export default function Game() {
   const [showSummary, setShowSummary] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
-  // Carga inicial: resuelve el estado diferido y trae el resumen de "mientras no estabas".
+  // Carga el estado del asentamiento (resuelve el cálculo diferido en el servidor).
+  // `showAway` controla si se muestra el resumen de "mientras no estabas" (solo al
+  // entrar, no en los refrescos automáticos al terminar una obra).
+  const load = useCallback(async (showAway: boolean) => {
+    const res = await fetch("/api/settlement");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Error al cargar");
+    setView(data.settlement);
+    setPlayer(data.player ?? null);
+    if (showAway && isNotableSummary(data.summary)) {
+      setSummary(data.summary);
+      setShowSummary(true);
+    }
+  }, []);
+
+  // Carga inicial.
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const res = await fetch("/api/settlement");
-        const data = await res.json();
-        if (!active) return;
-        if (!res.ok) throw new Error(data.error ?? "Error al cargar");
-        setView(data.settlement);
-        setPlayer(data.player ?? null);
-        if (isNotableSummary(data.summary)) {
-          setSummary(data.summary);
-          setShowSummary(true);
-        }
+        await load(true);
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : "Error al cargar");
       }
@@ -99,7 +118,31 @@ export default function Game() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [load]);
+
+  // Cuenta atrás: refresca el reloj cada segundo mientras haya alguna obra en curso.
+  const hasConstruction = !!view?.buildings.some((b) => b.construction);
+  useEffect(() => {
+    if (!hasConstruction) return;
+    const i = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(i);
+  }, [hasConstruction]);
+
+  // Cuando la obra más próxima termina, vuelve a pedir el estado al servidor (que
+  // la completa) para reflejar el edificio ya terminado y produciendo.
+  useEffect(() => {
+    if (!view) return;
+    const ends = view.buildings
+      .map((b) => b.construction?.endsAt)
+      .filter((x): x is string => !!x)
+      .map((iso) => new Date(iso).getTime());
+    if (ends.length === 0) return;
+    const delay = Math.max(0, Math.min(...ends) - Date.now()) + 600;
+    const t = setTimeout(() => {
+      load(false).catch(() => {});
+    }, delay);
+    return () => clearTimeout(t);
+  }, [view, load]);
 
   const dispatch = useCallback(async (action: ActionBody) => {
     setBusy(true);
@@ -206,23 +249,33 @@ export default function Game() {
         <p className="rounded-md bg-rose-950/60 px-3 py-2 text-sm text-rose-300">⚠️ {error}</p>
       )}
 
-      {/* Edificios */}
+      {/* Edificios (el Ayuntamiento tiene su propia tarjeta más abajo) */}
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-zinc-400">Edificios</h2>
-        {view.buildings.map((b) => (
-          <BuildingCard
-            key={b.id}
-            b={b}
-            freeColonists={population.free}
-            busy={busy}
-            onAssign={(workers) => dispatch({ kind: "assign", buildingId: b.id, workers })}
-            onUpgrade={() => dispatch({ kind: "upgrade", buildingId: b.id })}
-          />
-        ))}
+        {view.buildings
+          .filter((b) => b.type !== "TOWN_HALL")
+          .map((b) => (
+            <BuildingCard
+              key={b.id}
+              b={b}
+              freeColonists={population.free}
+              busy={busy}
+              nowMs={nowMs}
+              onAssign={(workers) => dispatch({ kind: "assign", buildingId: b.id, workers })}
+              onUpgrade={() => dispatch({ kind: "upgrade", buildingId: b.id })}
+            />
+          ))}
       </section>
 
       {/* Subir Ayuntamiento */}
-      <TownHallCard th={view.townHallUpgrade} level={view.townHallLevel} busy={busy} onUpgrade={() => dispatch({ kind: "upgradeTownHall" })} />
+      <TownHallCard
+        th={view.townHallUpgrade}
+        level={view.townHallLevel}
+        busy={busy}
+        nowMs={nowMs}
+        construction={view.buildings.find((b) => b.type === "TOWN_HALL")?.construction ?? null}
+        onUpgrade={() => dispatch({ kind: "upgradeTownHall" })}
+      />
 
       {/* Construir */}
       <section className="flex flex-col gap-2">
@@ -257,36 +310,77 @@ function ResourceCard({ icon, label, value, cap, rate }: { icon: string; label: 
   );
 }
 
+// Barra de progreso de una obra en curso, con cuenta atrás del tiempo restante.
+function ConstructionBar({
+  construction,
+  nowMs,
+  label,
+}: {
+  construction: NonNullable<BuildingView["construction"]>;
+  nowMs: number;
+  label: string;
+}) {
+  const endMs = new Date(construction.endsAt).getTime();
+  const remainingSec = Math.max(0, (endMs - nowMs) / 1000);
+  const total = construction.totalSeconds;
+  const progress = total > 0 ? Math.min(1, Math.max(0, (total - remainingSec) / total)) : 1;
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-xs text-amber-300">
+        <span>🏗️ {label}</span>
+        <span className="tabular-nums">
+          {remainingSec > 0 ? `queda ${fmtDuration(remainingSec)}` : "terminando…"}
+        </span>
+      </div>
+      <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-zinc-800">
+        <div
+          className="h-full rounded bg-amber-500 transition-all duration-500"
+          style={{ width: `${Math.round(progress * 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BuildingCard({
   b,
   freeColonists,
   busy,
+  nowMs,
   onAssign,
   onUpgrade,
 }: {
   b: BuildingView;
   freeColonists: number;
   busy: boolean;
+  nowMs: number;
   onAssign: (workers: number) => void;
   onUpgrade: () => void;
 }) {
   const isProducer = b.produces !== null;
-  const canAddWorker = isProducer && b.workers < b.maxWorkers && freeColonists > 0;
-  const canRemoveWorker = isProducer && b.workers > 0;
+  const isNew = b.level === 0; // construcción inicial (aún no funcional)
+  const showWorkers = isProducer && !isNew;
+  const canAddWorker = showWorkers && b.workers < b.maxWorkers && freeColonists > 0;
+  const canRemoveWorker = showWorkers && b.workers > 0;
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
       <div className="flex items-center justify-between">
         <span className="font-medium">
-          {BUILDING_ICON[b.type]} {BUILDING_LABEL[b.type]} <span className="text-xs text-zinc-500">N{b.level}</span>
+          {BUILDING_ICON[b.type]} {BUILDING_LABEL[b.type]}{" "}
+          {isNew ? (
+            <span className="text-xs text-amber-400">en construcción</span>
+          ) : (
+            <span className="text-xs text-zinc-500">N{b.level}</span>
+          )}
         </span>
-        {isProducer && (
+        {isProducer && !isNew && (
           <span className="text-xs text-emerald-400">+{b.productionPerHour} {RESOURCE_ICON[b.produces!]}/h</span>
         )}
       </div>
 
       {/* Asignar colonos */}
-      {isProducer && (
+      {showWorkers && (
         <div className="mt-2 flex items-center gap-3">
           <span className="text-xs text-zinc-400">Colonos</span>
           <button
@@ -309,17 +403,26 @@ function BuildingCard({
         </div>
       )}
 
-      {/* Mejorar */}
-      {b.upgrade && (
+      {/* Obra en curso */}
+      {b.construction && (
+        <ConstructionBar
+          construction={b.construction}
+          nowMs={nowMs}
+          label={isNew ? "Construyendo" : `Mejorando a N${b.construction.toLevel}`}
+        />
+      )}
+
+      {/* Mejorar (oculto mientras hay obra en curso) */}
+      {b.upgrade && !b.construction && (
         <div className="mt-2 flex items-center justify-between gap-2">
           <CostTag cost={b.upgrade.cost} />
           <button
             disabled={busy || !b.upgrade.canUpgrade}
             onClick={onUpgrade}
-            title={b.upgrade.canUpgrade ? "" : b.upgrade.reason}
+            title={b.upgrade.canUpgrade ? `Tarda ${fmtDuration(b.upgrade.durationSeconds)}` : b.upgrade.reason}
             className="rounded bg-indigo-600 px-3 py-1 text-sm font-medium disabled:bg-zinc-800 disabled:text-zinc-500"
           >
-            Mejorar a N{b.level + 1}
+            Mejorar a N{b.level + 1} · ⏱ {fmtDuration(b.upgrade.durationSeconds)}
           </button>
         </div>
       )}
@@ -327,7 +430,21 @@ function BuildingCard({
   );
 }
 
-function TownHallCard({ th, level, busy, onUpgrade }: { th: TownHallUpgrade; level: number; busy: boolean; onUpgrade: () => void }) {
+function TownHallCard({
+  th,
+  level,
+  busy,
+  nowMs,
+  construction,
+  onUpgrade,
+}: {
+  th: TownHallUpgrade;
+  level: number;
+  busy: boolean;
+  nowMs: number;
+  construction: BuildingView["construction"];
+  onUpgrade: () => void;
+}) {
   return (
     <section className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3">
       <div className="flex items-center justify-between">
@@ -335,19 +452,24 @@ function TownHallCard({ th, level, busy, onUpgrade }: { th: TownHallUpgrade; lev
         {th.atMax ? (
           <span className="text-xs text-zinc-500">Nivel máximo</span>
         ) : (
-          <div className="flex items-center gap-2">
-            <CostTag cost={th.cost} />
-            <button
-              disabled={busy || !th.canUpgrade}
-              onClick={onUpgrade}
-              title={th.canUpgrade ? "" : th.reason}
-              className="rounded bg-amber-600 px-3 py-1 text-sm font-medium text-black disabled:bg-zinc-800 disabled:text-zinc-500"
-            >
-              Subir a N{level + 1}
-            </button>
-          </div>
+          !construction && (
+            <div className="flex items-center gap-2">
+              <CostTag cost={th.cost} />
+              <button
+                disabled={busy || !th.canUpgrade}
+                onClick={onUpgrade}
+                title={th.canUpgrade ? `Tarda ${fmtDuration(th.durationSeconds)}` : th.reason}
+                className="rounded bg-amber-600 px-3 py-1 text-sm font-medium text-black disabled:bg-zinc-800 disabled:text-zinc-500"
+              >
+                Subir a N{level + 1} · ⏱ {fmtDuration(th.durationSeconds)}
+              </button>
+            </div>
+          )
         )}
       </div>
+      {construction && (
+        <ConstructionBar construction={construction} nowMs={nowMs} label={`Mejorando a N${construction.toLevel}`} />
+      )}
       <p className="mt-1 text-xs text-zinc-400">Sube el techo de edificios y de nivel. La progresión del asentamiento.</p>
     </section>
   );
@@ -358,13 +480,16 @@ function BuildOptionButton({ o, busy, onBuild }: { o: BuildOption; busy: boolean
     <button
       disabled={busy || !o.canBuild}
       onClick={onBuild}
-      title={o.canBuild ? "" : o.reason}
+      title={o.canBuild ? `Tarda ${fmtDuration(o.durationSeconds)}` : o.reason}
       className="flex flex-col items-start gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-left disabled:opacity-40"
     >
       <span className="text-sm font-medium">
         {BUILDING_ICON[o.type]} {BUILDING_LABEL[o.type]}
       </span>
-      <CostTag cost={o.cost} />
+      <div className="flex w-full items-center justify-between gap-2">
+        <CostTag cost={o.cost} />
+        <span className="text-xs text-amber-400/80">⏱ {fmtDuration(o.durationSeconds)}</span>
+      </div>
     </button>
   );
 }
@@ -376,6 +501,7 @@ function AwaySummary({ summary, onClose }: { summary: ResolveSummary; onClose: (
   if (summary.stone > 0.5) lines.push(`+${fmt(summary.stone)} 🪨`);
   if (summary.colonistsArrived > 0) lines.push(`👶 llegó ${summary.colonistsArrived} colono${summary.colonistsArrived === 1 ? "" : "s"}`);
   if (summary.colonistsLost > 0) lines.push(`💀 perdiste ${summary.colonistsLost} colono${summary.colonistsLost === 1 ? "" : "s"}`);
+  if (summary.buildingsCompleted > 0) lines.push(`🏗️ ${summary.buildingsCompleted} obra${summary.buildingsCompleted === 1 ? "" : "s"} terminada${summary.buildingsCompleted === 1 ? "" : "s"}`);
   if (summary.plagueActive) lines.push("🦠 hubo una plaga");
 
   return (
@@ -397,6 +523,7 @@ function isNotableSummary(s: ResolveSummary | undefined): boolean {
   return (
     s.colonistsArrived > 0 ||
     s.colonistsLost > 0 ||
+    s.buildingsCompleted > 0 ||
     s.plagueActive ||
     s.food > 1 ||
     s.wood > 1 ||

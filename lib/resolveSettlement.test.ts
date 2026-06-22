@@ -187,6 +187,69 @@ describe("simulate — hambruna y pérdida de población (§5)", () => {
   });
 });
 
+describe("simulate — tiempo de construcción", () => {
+  it("una mejora en curso produce a su nivel actual hasta terminar, luego al nuevo", () => {
+    const s = baseState({ food: 100, wood: 15, population: 3 });
+    // Serrería N1 con 2 colonos (5/h) mejorando a N2, termina a la 1h.
+    s.buildings.push({
+      type: BuildingType.SAWMILL,
+      level: 1,
+      workers: 2,
+      constructionEndsAt: at(1),
+    });
+    const { state, summary } = simulate(s, EPOCH, at(2));
+    // 1ª hora a N1: +5 (15→20). 2ª hora a N2 (8/h): 20→28.
+    expect(state.wood).toBeCloseTo(28, 5);
+    const sawmill = state.buildings.find((b) => b.type === BuildingType.SAWMILL)!;
+    expect(sawmill.level).toBe(2);
+    expect(sawmill.constructionEndsAt ?? null).toBeNull();
+    expect(summary.buildingsCompleted).toBe(1);
+  });
+
+  it("un edificio nuevo (nivel 0) no produce hasta que la obra termina", () => {
+    const s = baseState({ food: 100, wood: 0, population: 3 });
+    // Serrería nueva: nivel 0, ya con 2 colonos reservados, termina a las 2h.
+    s.buildings.push({
+      type: BuildingType.SAWMILL,
+      level: 0,
+      workers: 0,
+      constructionEndsAt: at(2),
+    });
+    // A la 1ª hora aún no produce nada.
+    const mid = simulate(s, EPOCH, at(1));
+    expect(mid.state.wood).toBe(0);
+    expect(mid.summary.buildingsCompleted).toBe(0);
+    // A las 3h ya está terminada (nivel 1) desde las 2h.
+    const done = simulate(s, EPOCH, at(3));
+    const sawmill = done.state.buildings.find((b) => b.type === BuildingType.SAWMILL)!;
+    expect(sawmill.level).toBe(1);
+    expect(done.summary.buildingsCompleted).toBe(1);
+  });
+
+  it("al terminar la mejora del Ayuntamiento sube el techo del asentamiento", () => {
+    const s = baseState({ food: 100 });
+    s.buildings[0].constructionEndsAt = at(1); // el Ayuntamiento (buildings[0]) mejora
+    const { state, summary } = simulate(s, EPOCH, at(2));
+    expect(state.townHallLevel).toBe(2);
+    expect(state.buildings[0].level).toBe(2);
+    expect(summary.buildingsCompleted).toBe(1);
+  });
+
+  it("una obra que aún no ha terminado no cambia nada", () => {
+    const s = baseState({ food: 100 });
+    s.buildings.push({
+      type: BuildingType.HOUSE,
+      level: 0,
+      workers: 0,
+      constructionEndsAt: at(10),
+    });
+    const { state, summary } = simulate(s, EPOCH, at(2));
+    const house = state.buildings.find((b) => b.type === BuildingType.HOUSE)!;
+    expect(house.level).toBe(0);
+    expect(summary.buildingsCompleted).toBe(0);
+  });
+});
+
 describe("simulate — plaga", () => {
   it("una plaga activa drena bienestar aunque haya comida", () => {
     const s = baseState();

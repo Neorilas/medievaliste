@@ -15,6 +15,7 @@ import {
   PRODUCERS,
   TOWN_HALL,
   buildCost,
+  constructionSeconds,
   maxWorkers,
   populationCapacity,
   productionPerHour,
@@ -74,6 +75,7 @@ export interface UpgradeInfo {
   cost: Cost;
   canUpgrade: boolean;
   reason?: string; // por qué no se puede (si canUpgrade es false)
+  durationSeconds: number; // cuánto tardará la mejora
 }
 
 export interface BuildingView {
@@ -85,6 +87,12 @@ export interface BuildingView {
   productionPerHour: number; // producción actual del edificio
   produces: string | null; // recurso que produce, o null
   upgrade: UpgradeInfo | null; // null para el Ayuntamiento (usa townHallUpgrade)
+  // Obra en curso (construcción inicial o mejora). null si está terminado.
+  construction: {
+    endsAt: string; // ISO del instante en que termina
+    totalSeconds: number; // duración total de esta obra (para barra de progreso)
+    toLevel: number; // nivel que tendrá al terminar
+  } | null;
 }
 
 export interface BuildOption {
@@ -92,6 +100,7 @@ export interface BuildOption {
   cost: Cost;
   canBuild: boolean;
   reason?: string;
+  durationSeconds: number; // cuánto tardará en construirse
 }
 
 export interface TownHallUpgrade {
@@ -99,6 +108,7 @@ export interface TownHallUpgrade {
   cost: Cost;
   canUpgrade: boolean;
   reason?: string;
+  durationSeconds: number; // cuánto tardará la mejora
 }
 
 export interface SettlementView {
@@ -148,7 +158,10 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     },
   });
 
-  const houseCount = s.buildings.filter((b) => b.type === BuildingType.HOUSE).length;
+  // Las casas aún en obra (level 0) no suben la capacidad todavía.
+  const houseCount = s.buildings.filter(
+    (b) => b.type === BuildingType.HOUSE && b.level >= 1,
+  ).length;
   const bestWarehouse = s.buildings
     .filter((b) => b.type === BuildingType.WAREHOUSE)
     .reduce((m, b) => Math.max(m, b.level), 0);
@@ -167,6 +180,7 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
       type: b.type,
       level: b.level,
       workers: b.workers,
+      constructing: b.constructionEndsAt !== null,
     })),
   };
 
@@ -179,6 +193,7 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
         cost: upgradeCost(b.type, b.level + 1),
         canUpgrade: res.ok,
         reason: res.error,
+        durationSeconds: constructionSeconds(b.type, b.level + 1),
       };
     }
     return {
@@ -190,12 +205,25 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
       productionPerHour: productionPerHour(b.type, b.level, b.workers),
       produces: producer ? producer.resource : null,
       upgrade,
+      construction: b.constructionEndsAt
+        ? {
+            endsAt: b.constructionEndsAt.toISOString(),
+            totalSeconds: constructionSeconds(b.type, b.level + 1),
+            toLevel: b.level + 1,
+          }
+        : null,
     };
   });
 
   const buildOptions: BuildOption[] = BUILDABLE.map((type) => {
     const res = validateAction(snapshot, { kind: "build", buildingType: type });
-    return { type, cost: buildCost(type), canBuild: res.ok, reason: res.error };
+    return {
+      type,
+      cost: buildCost(type),
+      canBuild: res.ok,
+      reason: res.error,
+      durationSeconds: constructionSeconds(type, 1),
+    };
   });
 
   const thAtMax = s.townHallLevel >= MAX_TOWN_HALL_LEVEL;
@@ -205,6 +233,9 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     cost: thAtMax ? {} : townHallUpgradeCost(s.townHallLevel + 1),
     canUpgrade: thRes.ok,
     reason: thRes.error,
+    durationSeconds: thAtMax
+      ? 0
+      : constructionSeconds(BuildingType.TOWN_HALL, s.townHallLevel + 1),
   };
 
   const sumRate = (type: BuildingType) =>

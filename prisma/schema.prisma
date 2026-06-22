@@ -19,6 +19,10 @@ model User {
   id            String    @id @default(cuid())
   name          String?
   email         String    @unique
+  // Nombre de usuario para login dual (email O username). Único e inmutable.
+  // Nullable porque los usuarios de Google se dan de alta sin él; el registro por
+  // credenciales siempre lo exige. Se almacena en minúsculas para unicidad.
+  username      String?   @unique
   emailVerified DateTime?
   image         String?
   passwordHash  String? // solo para login con email/contraseña (null si solo usa Google)
@@ -66,11 +70,21 @@ model VerificationToken {
 }
 
 model Settlement {
-  id            String   @id @default(cuid())
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId        String   @unique
-  name          String // nombre del asentamiento, definido por el jugador
-  townHallLevel Int      @default(1) // nivel del Ayuntamiento: techo global
+  id            String    @id @default(cuid())
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String    @unique
+  name          String    @default("Asentamiento sin nombre") // nombre del asentamiento, definido por el jugador
+  nameChangedAt DateTime? // último renombre; null = nunca renombrado (cooldown de 24h)
+  townHallLevel Int       @default(1) // nivel del Ayuntamiento: techo global
+
+  // Región (mundo) del asentamiento. Se elige en el onboarding y es PERMANENTE.
+  // Nullable mientras el jugador no ha completado la selección de región.
+  region Region?
+
+  // Posición en el tablero 2D abstracto de su región (0–100). Se asigna de forma
+  // procedural al fijar la región. Null hasta entonces.
+  posX Float?
+  posY Float?
 
   // Recursos (cantidades actuales)
   food    Float @default(0)
@@ -104,6 +118,13 @@ model Building {
   level        Int          @default(1)
   workers      Int          @default(0) // colonos asignados a ESTE edificio
 
+  // Construcción/mejora en curso. Si NO es null, el edificio está levantándose o
+  // mejorando y pasará a `level + 1` en este instante; el motor diferido lo
+  // completa al cruzar el timestamp (igual que el crecimiento de población).
+  // Un edificio recién encargado arranca en level 0 (no funcional) y sube a 1 al
+  // terminar; una mejora mantiene su nivel actual (sigue produciendo) hasta acabar.
+  constructionEndsAt DateTime?
+
   createdAt DateTime @default(now())
 
   @@index([settlementId])
@@ -136,4 +157,36 @@ enum EventType {
   PLAGUE
   FAMINE // hambruna: pérdida de población por bienestar bajo
   // Futuro: ATTACKED, ALLIANCE_REQUEST, etc. (no implementar en v0)
+}
+
+// Las 10 regiones de la Hispania romana. La región define el "mundo" online del
+// jugador: con quién comparte tablero. Los textos (nombre en juego, lore, color)
+// viven en lib/regionConfig.ts, NO aquí.
+enum Region {
+  GALLAECIA
+  CANTABRIA_ET_ASTURES
+  TARRACONENSIS
+  CAESARAUGUSTA
+  CELTIBERIA
+  LUSITANIA
+  CARTHAGINENSIS
+  BAETICA
+  INSULAE_BALEARES
+  INSULAE_FORTUNATAE
+}
+
+// Asentamientos neutrales (NPC) de cada región. En v1 solo son visibles en el
+// mapa; en fases futuras serán atacables/conquistables. Se generan de forma
+// procedural y determinista (seed por región) la primera vez que alguien entra
+// en esa región. Las posiciones son sobre el tablero 2D abstracto (0–100).
+model NeutralSettlement {
+  id        String   @id @default(cuid())
+  name      String
+  region    Region
+  level     Int      @default(1)
+  posX      Float // posición en mapa 2D abstracto (0–100)
+  posY      Float
+  createdAt DateTime @default(now())
+
+  @@index([region])
 }

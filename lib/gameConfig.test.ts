@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCost,
+  constructionSeconds,
   maxWorkers,
   productionPerHour,
   storageCap,
@@ -78,5 +79,32 @@ describe("maxWorkers / productionPerHour en niveles altos", () => {
   it("colonos por encima del tope no aportan nada extra", () => {
     const atCap = productionPerHour(BuildingType.SAWMILL, 3, 4);
     expect(productionPerHour(BuildingType.SAWMILL, 3, 10)).toBeCloseTo(atCap, 5);
+  });
+
+  it("un edificio en construcción (nivel 0) no admite colonos ni produce", () => {
+    expect(maxWorkers(BuildingType.FARM, 0)).toBe(0);
+    expect(productionPerHour(BuildingType.FARM, 0, 2)).toBe(0);
+  });
+});
+
+describe("constructionSeconds (tiempo de obra)", () => {
+  it("construir (nivel 1) usa el tiempo base del tipo", () => {
+    expect(constructionSeconds(BuildingType.HOUSE, 1)).toBe(120);
+    expect(constructionSeconds(BuildingType.QUARRY, 1)).toBe(240);
+  });
+
+  it("a mayor nivel objetivo, más tiempo", () => {
+    const l1 = constructionSeconds(BuildingType.FARM, 1);
+    const l2 = constructionSeconds(BuildingType.FARM, 2);
+    const l3 = constructionSeconds(BuildingType.FARM, 3);
+    expect(l2).toBeGreaterThan(l1);
+    expect(l3).toBeGreaterThan(l2);
+    // L2 = 180 * 1.8 = 324
+    expect(l2).toBe(324);
+  });
+
+  it("el Ayuntamiento tiene su propia tabla, más lenta", () => {
+    expect(constructionSeconds(BuildingType.TOWN_HALL, 2)).toBe(600);
+    expect(constructionSeconds(BuildingType.TOWN_HALL, 3)).toBe(1800);
   });
 });
