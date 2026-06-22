@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Asentamiento">
+  <!-- Maskable: fondo a sangre completa, glifo dentro de la zona segura (~64%). -->
+  <rect width="512" height="512" fill="#09090b"/>
+  <rect width="512" height="512" fill="url(#gm)" opacity="0.18"/>
+  <defs>
+    <linearGradient id="gm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#09090b"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(256 256) scale(0.62) translate(-256 -256)" fill="#f5d28a" stroke="#f5d28a">
+    <path d="M256 96 L392 176 L120 176 Z" stroke-linejoin="round" stroke-width="8"/>
+    <rect x="120" y="186" width="272" height="22" rx="4"/>
+    <rect x="140" y="220" width="28" height="150" rx="6"/>
+    <rect x="200" y="220" width="28" height="150" rx="6"/>
+    <rect x="260" y="220" width="28" height="150" rx="6"/>
+    <rect x="320" y="220" width="28" height="150" rx="6"/>
+    <rect x="104" y="384" width="304" height="22" rx="6"/>
+    <rect x="84" y="414" width="344" height="22" rx="6"/>
+  </g>
+</svg>

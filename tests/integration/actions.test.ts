@@ -35,7 +35,7 @@ describe("applyAction", () => {
     expect(after.workers).toBe(1);
   });
 
-  it("mejorar la granja a N2 sube el nivel y descuenta el coste", async () => {
+  it("mejorar la granja a N2 encarga la obra y descuenta el coste", async () => {
     const { settlementId } = await createUserWithSettlement();
     await prisma.settlement.update({ where: { id: settlementId }, data: { wood: 50 } });
     const farm = await prisma.building.findFirstOrThrow({ where: { settlementId, type: BuildingType.FARM } });
@@ -43,21 +43,27 @@ describe("applyAction", () => {
     await applyAction(settlementId, { kind: "upgrade", buildingId: farm.id });
     const after = await prisma.building.findUniqueOrThrow({ where: { id: farm.id } });
     const s = await prisma.settlement.findUniqueOrThrow({ where: { id: settlementId } });
-    expect(after.level).toBe(2);
+    // La mejora NO es instantánea: el edificio queda en obra (sigue a su nivel
+    // actual) y sube al terminar; el coste se descuenta al encargarla.
+    expect(after.level).toBe(1);
+    expect(after.constructionEndsAt).not.toBeNull();
     expect(s.wood).toBe(50 - 24);
   });
 
-  it("subir el Ayuntamiento sube el nivel del asentamiento y del propio edificio", async () => {
+  it("subir el Ayuntamiento encarga la obra y descuenta el coste", async () => {
     const { settlementId } = await createUserWithSettlement();
-    await prisma.settlement.update({ where: { id: settlementId }, data: { wood: 200, stone: 100 } });
+    // Dentro del tope de almacén inicial (60) para que resolver no recorte nada.
+    await prisma.settlement.update({ where: { id: settlementId }, data: { wood: 60, stone: 30 } });
     await applyAction(settlementId, { kind: "upgradeTownHall" });
 
     const s = await prisma.settlement.findUniqueOrThrow({ where: { id: settlementId }, include: { buildings: true } });
     const th = s.buildings.find((b) => b.type === BuildingType.TOWN_HALL)!;
-    expect(s.townHallLevel).toBe(2);
-    expect(th.level).toBe(2);
-    expect(s.wood).toBe(200 - 120);
-    expect(s.stone).toBe(100 - 40);
+    // El techo global NO sube hasta que la obra termina: queda en obra.
+    expect(s.townHallLevel).toBe(1);
+    expect(th.constructionEndsAt).not.toBeNull();
+    // N1→N2 cuesta solo madera (Cambio A); la piedra no se toca.
+    expect(s.wood).toBe(60 - 55);
+    expect(s.stone).toBe(30);
   });
 
   it("cierra el tramo de producción ANTES de aplicar la acción", async () => {

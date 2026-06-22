@@ -104,6 +104,11 @@ model Settlement {
   growthProgress Float @default(0) // horas elegibles acumuladas hacia el próximo colono
   famineProgress Float @default(0) // horas de bienestar bajo umbral acumuladas hacia la próxima pérdida
 
+  // Progreso del tutorial (Cambio C): mapa { stepId: true } de los coachmarks ya
+  // vistos. En BD (no localStorage) para que sobreviva a borrar el navegador.
+  // Las claves válidas viven en lib/tutorial.ts, no aquí.
+  tutorialProgress Json @default("{}")
+
   buildings Building[]
   events    Event[]
 

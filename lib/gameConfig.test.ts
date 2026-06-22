@@ -15,7 +15,8 @@ import { BuildingType } from "./generated/prisma/enums";
 describe("buildCost", () => {
   it("devuelve el coste de cada edificio construible", () => {
     expect(buildCost(BuildingType.HOUSE)).toEqual({ wood: 15 });
-    expect(buildCost(BuildingType.QUARRY)).toEqual({ wood: 20, stone: 10 });
+    // La Cantera se construye solo con madera (única fuente de piedra).
+    expect(buildCost(BuildingType.QUARRY)).toEqual({ wood: 30 });
   });
 
   it("el Ayuntamiento no es construible (coste vacío)", () => {
@@ -35,14 +36,21 @@ describe("upgradeCost", () => {
   });
 
   it("escala todos los recursos del coste base en la curva por defecto", () => {
-    // Cantera base {wood:20, stone:10}, N3 → factor 2.6 → wood 52, stone 26
-    expect(upgradeCost(BuildingType.QUARRY, 3)).toEqual({ wood: 52, stone: 26 });
+    // House no tiene costes explícitos de mejora: usa la curva por defecto sobre
+    // su base {wood:15}. N3 → factor 1.3*(3-1)=2.6 → ceil(15*2.6)=39.
+    expect(upgradeCost(BuildingType.HOUSE, 3)).toEqual({ wood: 39 });
+  });
+
+  it("la Cantera tiene costes de mejora explícitos con piedra (construir es solo madera)", () => {
+    expect(upgradeCost(BuildingType.QUARRY, 2)).toEqual({ wood: 30, stone: 15 });
+    expect(upgradeCost(BuildingType.QUARRY, 3)).toEqual({ wood: 60, stone: 35 });
   });
 });
 
 describe("townHallUpgradeCost", () => {
   it("coincide con la tabla del Ayuntamiento", () => {
-    expect(townHallUpgradeCost(2)).toEqual({ wood: 120, stone: 40 });
+    // La primera mejora (N1→N2) es solo madera: rompe el bloqueo de la piedra.
+    expect(townHallUpgradeCost(2)).toEqual({ wood: 55 });
     expect(townHallUpgradeCost(3)).toEqual({ wood: 300, stone: 120 });
   });
 

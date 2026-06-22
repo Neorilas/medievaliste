@@ -205,7 +205,12 @@ export interface TownHallTier {
 
 export const TOWN_HALL: Record<number, TownHallTier> = {
   1: { maxBuildings: 4, maxOtherLevel: 2, upgradeCost: {} }, // inicial
-  2: { maxBuildings: 6, maxOtherLevel: 3, upgradeCost: { wood: 120, stone: 40 } },
+  // La PRIMERA mejora (N1→N2) cuesta SOLO MADERA y debe ser pagable dentro del
+  // tope de almacén inicial (60): sin piedra todavía no se puede ampliar el almacén
+  // (la mejora de Almacén pide piedra), así que un coste >60 sería inalcanzable.
+  // Esta mejora es la que DESBLOQUEA la Cantera (BUILD_MIN_TOWN_HALL), rompiendo el
+  // bloqueo "sin cantera no hay piedra → sin piedra no se sube el Ayuntamiento".
+  2: { maxBuildings: 6, maxOtherLevel: 3, upgradeCost: { wood: 55 } },
   3: { maxBuildings: 9, maxOtherLevel: 4, upgradeCost: { wood: 300, stone: 120 } },
 } as const;
 
@@ -225,7 +230,10 @@ export const BUILD_COST: Partial<Record<BuildingType, Partial<Record<Resource, n
   [BuildingType.HOUSE]: { wood: 15 },
   [BuildingType.PLAZA]: { wood: 20 },
   [BuildingType.SAWMILL]: { wood: 15 },
-  [BuildingType.QUARRY]: { wood: 20, stone: 10 },
+  // La Cantera es la ÚNICA fuente de piedra; por eso su PRIMERA construcción no
+  // puede costar piedra (sería inconstruible). Coste solo madera. Su mejora sí
+  // escala con piedra una vez que ya genera (curva por defecto).
+  [BuildingType.QUARRY]: { wood: 30 },
   [BuildingType.FARM]: { wood: 18 },
   [BuildingType.WAREHOUSE]: { wood: 25 },
   // TOWN_HALL no se construye: existe desde el inicio y solo se mejora.
@@ -239,6 +247,10 @@ export const UPGRADE_COST: Partial<
   [BuildingType.FARM]: { 2: { wood: 24 } },
   [BuildingType.SAWMILL]: { 2: { wood: 20 } },
   [BuildingType.WAREHOUSE]: { 2: { wood: 30, stone: 10 } },
+  // La Cantera se CONSTRUYE solo con madera (única fuente de piedra), pero MEJORARLA
+  // sí cuesta piedra una vez que ya la genera. Explícito para no heredar la curva
+  // por defecto (que sería solo madera al venir de un coste base sin piedra).
+  [BuildingType.QUARRY]: { 2: { wood: 30, stone: 15 }, 3: { wood: 60, stone: 35 } },
 };
 
 /** Coste de subir un edificio a `targetLevel`. */

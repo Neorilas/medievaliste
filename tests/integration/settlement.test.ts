@@ -51,8 +51,9 @@ describe("getSettlementView", () => {
 
     const quarry = v.buildOptions.find((o) => o.type === BuildingType.QUARRY)!;
     expect(quarry.canBuild).toBe(false); // bloqueada hasta Ayuntamiento N2
+    expect(quarry.lockedByTownHall).toBe(2); // candado por nivel de Ayuntamiento
 
-    expect(v.townHallUpgrade.canUpgrade).toBe(false); // no asequible al inicio
-    expect(v.townHallUpgrade.cost).toEqual({ wood: 120, stone: 40 });
+    expect(v.townHallUpgrade.canUpgrade).toBe(false); // no asequible al inicio (15 < 55)
+    expect(v.townHallUpgrade.cost).toEqual({ wood: 55 }); // solo madera (Cambio A)
   });
 });

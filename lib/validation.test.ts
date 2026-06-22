@@ -110,7 +110,8 @@ describe("upgradeTownHall", () => {
   it("permite subir el Ayuntamiento con recursos", () => {
     const r = validateAction(snap({ wood: 200, stone: 100 }), { kind: "upgradeTownHall" });
     expect(r.ok).toBe(true);
-    expect(r.cost).toEqual({ wood: 120, stone: 40 });
+    // N1→N2 es solo madera (Cambio A): rompe el bloqueo de la piedra.
+    expect(r.cost).toEqual({ wood: 55 });
   });
 
   it("rechaza sin recursos", () => {

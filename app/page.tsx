@@ -19,6 +19,13 @@ import type {
 } from "@/lib/settlement";
 import type { StatDelta } from "@/lib/gameConfig";
 import type { ResolveSummary } from "@/lib/resolveSettlement";
+import type { TutorialStepId } from "@/lib/tutorial";
+import {
+  TutorialProvider,
+  TutorialLayer,
+  useTutorial,
+  useTutorialAnchor,
+} from "@/components/Tutorial";
 
 interface PlayerInfo {
   email?: string | null;
@@ -332,8 +339,90 @@ export default function Game() {
     );
   }
 
+  const eligible = computeEligibleSteps(view, showSummary, summary);
+
+  return (
+    <TutorialProvider initialProgress={view.tutorialProgress} eligible={eligible}>
+      <GameView
+        view={view}
+        player={player}
+        summary={summary}
+        showSummary={showSummary}
+        setShowSummary={setShowSummary}
+        error={error}
+        busy={busy}
+        nowMs={nowMs}
+        dispatch={dispatch}
+        rename={rename}
+      />
+      <TutorialLayer />
+    </TutorialProvider>
+  );
+}
+
+// Decide qué pasos del tutorial pueden mostrarse según el estado actual del juego
+// (Cambio C). El provider elige luego el de mayor prioridad pendiente con ancla.
+function computeEligibleSteps(
+  view: SettlementView,
+  showSummary: boolean,
+  summary: ResolveSummary | null,
+): TutorialStepId[] {
+  const e: TutorialStepId[] = ["sawSawmill", "sawResources", "sawTownHall", "sawBuildMenu"];
+  if (view.buildings.some((b) => b.produces && b.level >= 1 && b.maxWorkers > 0)) {
+    e.push("sawColonistAssign");
+  }
+  if (showSummary && summary) e.push("sawClaim");
+  const { cap, food, wood, stone } = view.resources;
+  if (cap > 0 && [food, wood, stone].some((v) => v >= cap * 0.9)) e.push("sawStorageFull");
+  const hasHouse = view.buildings.some((b) => b.type === "HOUSE");
+  if (!hasHouse && view.population.free >= 1) e.push("sawHouseHint");
+  return e;
+}
+
+interface GameViewProps {
+  view: SettlementView;
+  player: PlayerInfo | null;
+  summary: ResolveSummary | null;
+  showSummary: boolean;
+  setShowSummary: (v: boolean) => void;
+  error: string | null;
+  busy: boolean;
+  nowMs: number;
+  dispatch: (action: ActionBody) => void;
+  rename: (name: string) => Promise<string | null>;
+}
+
+// Toda la UI del asentamiento. Vive dentro de <TutorialProvider> para poder
+// registrar anclas de coachmarks (Cambio C).
+function GameView({
+  view,
+  player,
+  summary,
+  showSummary,
+  setShowSummary,
+  error,
+  busy,
+  nowMs,
+  dispatch,
+  rename,
+}: GameViewProps) {
   const { resources, population, rates, welfare } = view;
   const welfareDanger = welfare < 70;
+
+  // Anclas del tutorial para las distintas zonas de la pantalla.
+  const resAnchor = useTutorialAnchor("sawResources");
+  const storeAnchor = useTutorialAnchor("sawStorageFull");
+  const resourcesRef = useCallback(
+    (el: HTMLElement | null) => {
+      resAnchor(el);
+      storeAnchor(el);
+    },
+    [resAnchor, storeAnchor],
+  );
+  const townHallAnchor = useTutorialAnchor("sawTownHall");
+  const buildMenuAnchor = useTutorialAnchor("sawBuildMenu");
+  const firstAssignableId =
+    view.buildings.find((b) => b.produces && b.level >= 1 && b.maxWorkers > 0)?.id ?? null;
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-4 bg-zinc-950 px-4 py-5 text-zinc-100">
@@ -369,7 +458,7 @@ export default function Game() {
       )}
 
       {/* Recursos */}
-      <section className="grid grid-cols-2 gap-2">
+      <section ref={resourcesRef} className="grid grid-cols-2 gap-2">
         <ResourceCard icon={RESOURCE_ICON.food} label="Comida" value={resources.food} cap={resources.cap} rate={rates.food} />
         <ResourceCard icon={RESOURCE_ICON.wood} label="Madera" value={resources.wood} cap={resources.cap} rate={rates.wood} />
         <ResourceCard icon={RESOURCE_ICON.stone} label="Piedra" value={resources.stone} cap={resources.cap} rate={rates.stone} />
@@ -414,6 +503,7 @@ export default function Game() {
               freeColonists={population.free}
               busy={busy}
               nowMs={nowMs}
+              colonistAnchor={b.id === firstAssignableId}
               onAssign={(workers) => dispatch({ kind: "assign", buildingId: b.id, workers })}
               onUpgrade={() => dispatch({ kind: "upgrade", buildingId: b.id })}
             />
@@ -427,12 +517,13 @@ export default function Game() {
         have={resources}
         busy={busy}
         nowMs={nowMs}
+        anchorRef={townHallAnchor}
         construction={view.buildings.find((b) => b.type === "TOWN_HALL")?.construction ?? null}
         onUpgrade={() => dispatch({ kind: "upgradeTownHall" })}
       />
 
       {/* Construir */}
-      <section className="flex flex-col gap-2">
+      <section ref={buildMenuAnchor} className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-zinc-400">
           Construir <span className="text-zinc-600">({view.buildings.length}/{view.maxBuildings})</span>
         </h2>
@@ -502,6 +593,7 @@ function BuildingCard({
   freeColonists,
   busy,
   nowMs,
+  colonistAnchor = false,
   onAssign,
   onUpgrade,
 }: {
@@ -510,6 +602,7 @@ function BuildingCard({
   freeColonists: number;
   busy: boolean;
   nowMs: number;
+  colonistAnchor?: boolean; // este edificio es el ancla del coachmark de colonos
   onAssign: (workers: number) => void;
   onUpgrade: () => void;
 }) {
@@ -518,6 +611,7 @@ function BuildingCard({
   const showWorkers = isProducer && !isNew;
   const canAddWorker = showWorkers && b.workers < b.maxWorkers && freeColonists > 0;
   const canRemoveWorker = showWorkers && b.workers > 0;
+  const colonistRef = useTutorialAnchor(colonistAnchor && showWorkers ? "sawColonistAssign" : null);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
@@ -537,7 +631,7 @@ function BuildingCard({
 
       {/* Asignar colonos */}
       {showWorkers && (
-        <div className="mt-2 flex items-center gap-3">
+        <div ref={colonistRef} className="mt-2 flex items-center gap-3">
           <span className="text-xs text-zinc-400">Colonos</span>
           <button
             disabled={busy || !canRemoveWorker}
@@ -605,6 +699,7 @@ function TownHallCard({
   have,
   busy,
   nowMs,
+  anchorRef,
   construction,
   onUpgrade,
 }: {
@@ -613,11 +708,12 @@ function TownHallCard({
   have: Held;
   busy: boolean;
   nowMs: number;
+  anchorRef?: (el: HTMLElement | null) => void;
   construction: BuildingView["construction"];
   onUpgrade: () => void;
 }) {
   return (
-    <section className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3">
+    <section ref={anchorRef} className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3">
       <div className="flex items-center justify-between">
         <span className="font-medium">{BUILDING_ICON.TOWN_HALL} Ayuntamiento N{level}</span>
         {th.atMax && <span className="text-xs text-zinc-500">✦ Nivel máximo alcanzado</span>}
@@ -654,25 +750,51 @@ function TownHallCard({
 }
 
 function BuildOptionButton({ o, have, busy, onBuild }: { o: BuildOption; have: Held; busy: boolean; onBuild: () => void }) {
+  const locked = o.lockedByTownHall !== null;
+  const lockMsg = locked ? `Requiere Ayuntamiento N${o.lockedByTownHall}` : undefined;
+  const { complete, isDone } = useTutorial();
+  // La Serrería y la Casa son anclas de sus respectivos coachmarks.
+  const stepForType: TutorialStepId | null =
+    o.type === "SAWMILL" ? "sawSawmill" : o.type === "HOUSE" ? "sawHouseHint" : null;
+  const anchorRef = useTutorialAnchor(stepForType);
+
+  function handleClick() {
+    // Interactuar con el menú de construcción completa el coachmark bloqueante inicial.
+    if (!isDone("sawSawmill")) complete("sawSawmill");
+    onBuild();
+  }
+
   return (
     <button
+      ref={anchorRef}
       disabled={busy || !o.canBuild}
-      onClick={onBuild}
-      title={o.canBuild ? `Tarda ${fmtDuration(o.durationSeconds)}` : o.reason}
-      className="flex flex-col items-start gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-left disabled:opacity-40"
+      onClick={handleClick}
+      title={locked ? lockMsg : o.canBuild ? `Tarda ${fmtDuration(o.durationSeconds)}` : o.reason}
+      className={`flex flex-col items-start gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-left disabled:cursor-not-allowed ${
+        locked ? "opacity-50" : "disabled:opacity-40"
+      }`}
     >
       <div className="flex w-full items-center justify-between gap-2">
         <span className="text-sm font-medium">
           {BUILDING_ICON[o.type]} {BUILDING_LABEL[o.type]}
         </span>
-        <span className="text-xs text-amber-400/80">⏱ {fmtDuration(o.durationSeconds)}</span>
+        {locked ? (
+          <span className="text-xs text-zinc-500">🔒</span>
+        ) : (
+          <span className="text-xs text-amber-400/80">⏱ {fmtDuration(o.durationSeconds)}</span>
+        )}
       </div>
-      <ResourceCost cost={o.cost} have={have} />
+      {locked ? (
+        <span className="text-xs text-zinc-500">{lockMsg}</span>
+      ) : (
+        <ResourceCost cost={o.cost} have={have} />
+      )}
     </button>
   );
 }
 
 function AwaySummary({ summary, onClose }: { summary: ResolveSummary; onClose: () => void }) {
+  const claimAnchor = useTutorialAnchor("sawClaim");
   const lines: string[] = [];
   if (summary.food > 0.5) lines.push(`+${fmt(summary.food)} 🍞`);
   if (summary.wood > 0.5) lines.push(`+${fmt(summary.wood)} 🪵`);
@@ -683,7 +805,7 @@ function AwaySummary({ summary, onClose }: { summary: ResolveSummary; onClose: (
   if (summary.plagueActive) lines.push("🦠 hubo una plaga");
 
   return (
-    <div className="rounded-lg border border-indigo-800 bg-indigo-950/40 p-3">
+    <div ref={claimAnchor} className="rounded-lg border border-indigo-800 bg-indigo-950/40 p-3">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm font-medium text-indigo-200">Mientras no estabas ({Math.round(summary.elapsedHours)}h)</p>

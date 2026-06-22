@@ -10,6 +10,7 @@
 // ============================================================================
 
 import {
+  BUILD_MIN_TOWN_HALL,
   INITIAL,
   MAX_TOWN_HALL_LEVEL,
   PRODUCERS,
@@ -30,6 +31,7 @@ import { validateAction, type Cost, type SettlementSnapshot } from "./validation
 import { BuildingType, Region } from "./generated/prisma/enums";
 import { REGIONS } from "./regionConfig";
 import { renameCooldownRemaining } from "./settlementIdentity";
+import { parseTutorialProgress, type TutorialProgress } from "./tutorial";
 
 // Tipos de edificio que el jugador puede construir (el Ayuntamiento ya existe).
 const BUILDABLE: BuildingType[] = [
@@ -107,6 +109,10 @@ export interface BuildOption {
   canBuild: boolean;
   reason?: string;
   durationSeconds: number; // cuánto tardará en construirse
+  // Nivel de Ayuntamiento que falta para desbloquear este edificio, o null si ya
+  // está desbloqueado. Cuando no es null, la UI lo muestra bloqueado (candado),
+  // independientemente de si el jugador puede pagarlo (Cambio A).
+  lockedByTownHall: number | null;
 }
 
 export interface TownHallUpgrade {
@@ -153,6 +159,9 @@ export interface SettlementView {
   buildings: BuildingView[];
   buildOptions: BuildOption[];
   townHallUpgrade: TownHallUpgrade;
+  // Pasos del tutorial ya vistos (Cambio C). El cliente decide cuándo mostrar cada
+  // coachmark pendiente según el estado del juego.
+  tutorialProgress: TutorialProgress;
   unseenEvents: {
     id: string;
     type: string;
@@ -236,12 +245,15 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
 
   const buildOptions: BuildOption[] = BUILDABLE.map((type) => {
     const res = validateAction(snapshot, { kind: "build", buildingType: type });
+    const minTH = BUILD_MIN_TOWN_HALL[type];
+    const locked = minTH && s.townHallLevel < minTH ? minTH : null;
     return {
       type,
       cost: buildCost(type),
       canBuild: res.ok,
       reason: res.error,
       durationSeconds: constructionSeconds(type, 1),
+      lockedByTownHall: locked,
     };
   });
 
@@ -301,6 +313,7 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     buildings,
     buildOptions,
     townHallUpgrade,
+    tutorialProgress: parseTutorialProgress(s.tutorialProgress),
     unseenEvents: s.events.map((e) => ({
       id: e.id,
       type: e.type,
