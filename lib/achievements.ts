@@ -9,8 +9,11 @@
 //     siguiente NO completada de cada cadena; las posteriores quedan "bloqueadas".
 //   - Sueltas: `chainId === null`. Independientes, disponibles desde el inicio.
 //
-// Las recompensas se entregan automáticamente al cumplir la condición (no hay
-// paso de "reclamar"). `evaluateAchievements` se llama tras cada cambio de estado.
+// Canje manual (Bloque 5): la DETECCIÓN y la APLICACIÓN de recompensas están
+// separadas. `evaluateAchievements` solo DETECTA (marca completadas con
+// completedAt) tras cada cambio de estado; NO toca los recursos. La recompensa se
+// aplica únicamente cuando el jugador reclama manualmente (POST /api/achievements/
+// claim/:id → `claimAchievement`).
 // ============================================================================
 
 import { BuildingType } from "./generated/prisma/enums";
@@ -261,6 +264,14 @@ export interface AchievementProgress {
   current: number;
   target: number;
   completedAt: string | null;
+  // null mientras esté pendiente de canje; fecha una vez reclamada la recompensa.
+  claimedAt: string | null;
+}
+
+// Estado de completitud guardado en BD para cada hazaña del usuario.
+export interface CompletionRecord {
+  completedAt: Date;
+  claimedAt: Date | null;
 }
 
 export interface CategorizedAchievements {
@@ -276,19 +287,23 @@ export interface CategorizedAchievements {
  * "disponible" y el resto "bloqueadas". Las sueltas nunca se bloquean.
  */
 export function categorizeAchievements(
-  completedMap: Map<string, Date>,
+  completedMap: Map<string, CompletionRecord>,
   values: AchievementState,
 ): CategorizedAchievements {
   const completed: AchievementProgress[] = [];
   const available: AchievementProgress[] = [];
   const locked: { id: string; title: string; chainId: string | null }[] = [];
 
-  const progress = (def: AchievementDef): AchievementProgress => ({
-    def,
-    current: Math.floor(values[def.conditionType]),
-    target: def.conditionValue,
-    completedAt: completedMap.get(def.id)?.toISOString() ?? null,
-  });
+  const progress = (def: AchievementDef): AchievementProgress => {
+    const rec = completedMap.get(def.id);
+    return {
+      def,
+      current: Math.floor(values[def.conditionType]),
+      target: def.conditionValue,
+      completedAt: rec?.completedAt.toISOString() ?? null,
+      claimedAt: rec?.claimedAt?.toISOString() ?? null,
+    };
+  };
 
   // Sueltas.
   for (const def of ACHIEVEMENTS.filter((a) => a.chainId === null)) {
@@ -323,7 +338,8 @@ export function categorizeAchievements(
 }
 
 // ----------------------------------------------------------------------------
-// Evaluación: comprueba condiciones, entrega recompensas, persiste completados.
+// Detección: comprueba condiciones y persiste completados. NO entrega recompensas
+// (eso ocurre al reclamar, ver `claimAchievement`).
 // ----------------------------------------------------------------------------
 export interface CompletedAchievement {
   id: string;
@@ -356,9 +372,11 @@ function candidates(completedIds: Set<string>): AchievementDef[] {
 }
 
 /**
- * Evalúa las hazañas del usuario dueño de `settlementId` DENTRO de una transacción
- * abierta, sobre el estado ya actualizado. Entrega recompensas, persiste los
- * UserAchievement y devuelve las hazañas completadas en esta evaluación (para la UI).
+ * DETECTA las hazañas recién completadas por el usuario dueño de `settlementId`
+ * DENTRO de una transacción abierta, sobre el estado ya actualizado. Persiste los
+ * UserAchievement (sin claimedAt: quedan pendientes de canje) y devuelve las
+ * completadas en esta evaluación (para la UI). NO entrega recompensas: eso ocurre
+ * al reclamar manualmente (`claimAchievement`).
  *
  * Debe llamarse SIEMPRE con el estado fresco (después de aplicar el cambio que la
  * dispara), para no evaluar sobre estado obsoleto.
@@ -381,13 +399,12 @@ export async function evaluateAchievements(
   const completedIds = new Set(done.map((d) => d.achievementId));
 
   const values = currentValues(settlement);
-
-  // Recompensas acumuladas para aplicar de una sola vez al final.
-  const grant: Required<Reward> = { wood: 0, food: 0, stone: 0, colonist: 0 };
   const newlyCompleted: CompletedAchievement[] = [];
 
-  // Bucle de punto fijo: una recompensa de colono puede disparar la siguiente
-  // hazaña de población, y completar una de cadena habilita evaluar la siguiente.
+  // Bucle de punto fijo: completar una hazaña de cadena habilita evaluar la
+  // siguiente de esa cadena en la misma pasada (p. ej. si se produjo madera de
+  // sobra estando offline, se detectan wood_1 y wood_2 a la vez). Las recompensas
+  // ya no se aplican aquí, así que no hay cascada por colonos.
   let changed = true;
   while (changed) {
     changed = false;
@@ -395,7 +412,8 @@ export async function evaluateAchievements(
       if (completedIds.has(def.id)) continue;
       if (values[def.conditionType] < def.conditionValue) continue;
 
-      // Se cumple: registrar completado (la unicidad protege de duplicados).
+      // Se cumple: registrar completado, pendiente de canje (claimedAt = null).
+      // La unicidad protege de duplicados.
       await tx.userAchievement.create({
         data: { userId, achievementId: def.id },
       });
@@ -407,30 +425,76 @@ export async function evaluateAchievements(
         reward: def.reward,
       });
 
-      // Acumular recompensa y reflejar en los valores en memoria (los colonos
-      // afectan a colonists_total; el resto de recursos no son condiciones).
-      grant.wood += def.reward.wood ?? 0;
-      grant.food += def.reward.food ?? 0;
-      grant.stone += def.reward.stone ?? 0;
-      const colonist = def.reward.colonist ?? 0;
-      grant.colonist += colonist;
-      if (colonist > 0) values.colonists_total += colonist;
-
       changed = true;
     }
   }
 
-  if (newlyCompleted.length > 0) {
+  return newlyCompleted;
+}
+
+/** Nº de hazañas completadas pendientes de canje (para el badge de navegación). */
+export async function countPendingClaims(
+  tx: Prisma.TransactionClient,
+  userId: string,
+): Promise<number> {
+  return tx.userAchievement.count({ where: { userId, claimedAt: null } });
+}
+
+// Errores tipados de `claimAchievement`, para que el endpoint los mapee a 404/409.
+export type ClaimErrorReason = "not_found" | "already_claimed";
+export class ClaimError extends Error {
+  constructor(public reason: ClaimErrorReason) {
+    super(reason);
+  }
+}
+
+/**
+ * Reclama (canjea) la recompensa de una hazaña completada del usuario, en su propia
+ * transacción: aplica los recursos al settlement y escribe claimedAt. Idempotente
+ * frente a dobles clics gracias a un update condicional sobre claimedAt == null.
+ *
+ * Lanza ClaimError("not_found") si la hazaña no existe o no es del usuario, y
+ * ClaimError("already_claimed") si ya fue reclamada.
+ */
+export async function claimAchievement(
+  userId: string,
+  achievementId: string,
+): Promise<Reward> {
+  const { prisma } = await import("./prisma");
+  return prisma.$transaction(async (tx) => {
+    const ua = await tx.userAchievement.findUnique({
+      where: { id: achievementId },
+      select: { id: true, userId: true, achievementId: true, claimedAt: true },
+    });
+    if (!ua || ua.userId !== userId) throw new ClaimError("not_found");
+    if (ua.claimedAt !== null) throw new ClaimError("already_claimed");
+
+    const def = getAchievement(ua.achievementId);
+    // Definición retirada del código: nada que entregar, pero cerramos el claim.
+    const reward: Reward = def?.reward ?? {};
+
+    // Marca como reclamada de forma condicional para evitar dobles entregas en una
+    // carrera (dos peticiones simultáneas): solo una verá count === 1.
+    const marked = await tx.userAchievement.updateMany({
+      where: { id: ua.id, claimedAt: null },
+      data: { claimedAt: new Date() },
+    });
+    if (marked.count === 0) throw new ClaimError("already_claimed");
+
+    const settlement = await tx.settlement.findUniqueOrThrow({
+      where: { userId },
+      select: { id: true },
+    });
     await tx.settlement.update({
-      where: { id: settlementId },
+      where: { id: settlement.id },
       data: {
-        wood: { increment: grant.wood },
-        food: { increment: grant.food },
-        stone: { increment: grant.stone },
-        population: { increment: grant.colonist },
+        wood: { increment: reward.wood ?? 0 },
+        food: { increment: reward.food ?? 0 },
+        stone: { increment: reward.stone ?? 0 },
+        population: { increment: reward.colonist ?? 0 },
       },
     });
-  }
 
-  return newlyCompleted;
+    return reward;
+  });
 }

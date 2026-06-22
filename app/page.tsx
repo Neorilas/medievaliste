@@ -27,7 +27,7 @@ import {
   useTutorial,
   useTutorialAnchor,
 } from "@/components/Tutorial";
-import { AchievementsPanel, formatReward } from "@/components/AchievementsPanel";
+import { AchievementsPanel } from "@/components/AchievementsPanel";
 import { ToastStack, type Toast } from "@/components/GameToasts";
 import { EventModal } from "@/components/EventModal";
 import type { EventView } from "@/lib/events";
@@ -235,6 +235,8 @@ export default function Game() {
   const [busy, setBusy] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [panelOpen, setPanelOpen] = useState(false);
+  // Nº de hazañas completadas pendientes de canje (badge en el botón de Hazañas).
+  const [pendingClaims, setPendingClaims] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [pendingEvent, setPendingEvent] = useState<EventView | null>(null);
   const [eventBusy, setEventBusy] = useState(false);
@@ -253,7 +255,7 @@ export default function Game() {
           id: ++toastId.current,
           kind: "achievement",
           title: `🏆 ${a.title}`,
-          subtitle: `Recompensa: ${formatReward(a.reward)}`,
+          subtitle: "¡Hazaña completada! Reclama tu recompensa en 🏆 Hazañas.",
         });
       }
       if (referralActivated) {
@@ -284,6 +286,7 @@ export default function Game() {
       }
       setView(data.settlement);
       setPlayer(data.player ?? null);
+      setPendingClaims(data.pendingClaims ?? 0);
       if (showAway && isNotableSummary(data.summary)) {
         setSummary(data.summary);
         setShowSummary(true);
@@ -320,6 +323,7 @@ export default function Game() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "No se pudo resolver el evento");
         if (data.settlement) setView(data.settlement);
+        setPendingClaims((n) => n + (data.newAchievements?.length ?? 0));
         pushReactions(data.newAchievements);
         setPendingEvent(null);
         // Por si tocara encolar otro (poco habitual: el timer no ha corrido aún).
@@ -385,6 +389,7 @@ export default function Game() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Acción no válida");
       setView(data.settlement);
+      setPendingClaims((n) => n + (data.newAchievements?.length ?? 0));
       pushReactions(data.newAchievements, data.referralActivated);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
@@ -445,10 +450,16 @@ export default function Game() {
         dispatch={dispatch}
         rename={rename}
         onOpenPanel={() => setPanelOpen(true)}
+        pendingClaims={pendingClaims}
       />
       <TutorialLayer />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
-      {panelOpen && <AchievementsPanel onClose={() => setPanelOpen(false)} />}
+      {panelOpen && (
+        <AchievementsPanel
+          onClose={() => setPanelOpen(false)}
+          onClaimed={() => load(false).catch(() => {})}
+        />
+      )}
       {pendingEvent && (
         <EventModal
           event={pendingEvent}
@@ -492,6 +503,7 @@ interface GameViewProps {
   dispatch: (action: ActionBody) => void;
   rename: (name: string) => Promise<string | null>;
   onOpenPanel: () => void;
+  pendingClaims: number;
 }
 
 // Toda la UI del asentamiento. Vive dentro de <TutorialProvider> para poder
@@ -508,6 +520,7 @@ function GameView({
   dispatch,
   rename,
   onOpenPanel,
+  pendingClaims,
 }: GameViewProps) {
   const { resources, population, rates, welfare } = view;
   const welfareDanger = welfare < 70;
@@ -543,9 +556,17 @@ function GameView({
           <div className="flex items-center gap-3">
             <button
               onClick={onOpenPanel}
-              className="text-xs text-amber-300 hover:text-amber-200"
+              className="relative text-xs text-amber-300 hover:text-amber-200"
             >
               🏆 Hazañas
+              {pendingClaims > 0 && (
+                <span
+                  className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold leading-none text-white"
+                  aria-label={`${pendingClaims} recompensas pendientes`}
+                >
+                  {pendingClaims}
+                </span>
+              )}
             </button>
             <Link href="/map" className="text-xs text-indigo-400 hover:text-indigo-300">Mapa</Link>
             {player?.isAdmin && (

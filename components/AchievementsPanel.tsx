@@ -27,6 +27,8 @@ interface AchievementProgress {
   current: number;
   target: number;
   completedAt: string | null;
+  // null mientras esté pendiente de canje; fecha una vez reclamada.
+  claimedAt: string | null;
 }
 interface AchievementsData {
   completed: AchievementProgress[];
@@ -63,9 +65,37 @@ export function formatReward(reward: Reward): string {
   return parts.join(" ");
 }
 
+// Etiqueta explícita para el feedback de canje ("+50 madera").
+const REWARD_LABEL: Record<keyof Reward, [string, string]> = {
+  wood: ["madera", "madera"],
+  food: ["comida", "comida"],
+  stone: ["piedra", "piedra"],
+  colonist: ["colono", "colonos"],
+};
+
+/** Recompensa en texto legible: "+50 madera" · "+100 comida, +1 colono". */
+function formatRewardObtained(reward: Reward): string {
+  const parts: string[] = [];
+  for (const key of ["wood", "food", "stone", "colonist"] as const) {
+    const v = reward[key];
+    if (v) {
+      const [singular, plural] = REWARD_LABEL[key];
+      parts.push(`+${v} ${v === 1 ? singular : plural}`);
+    }
+  }
+  return parts.join(", ");
+}
+
 type Tab = "achievements" | "referrals";
 
-export function AchievementsPanel({ onClose }: { onClose: () => void }) {
+export function AchievementsPanel({
+  onClose,
+  onClaimed,
+}: {
+  onClose: () => void;
+  // Se invoca tras un canje con éxito para refrescar recursos y el badge del padre.
+  onClaimed: () => void;
+}) {
   const [tab, setTab] = useState<Tab>("achievements");
 
   return (
@@ -97,7 +127,7 @@ export function AchievementsPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {tab === "achievements" ? <AchievementsTab /> : <ReferralsTab />}
+          {tab === "achievements" ? <AchievementsTab onClaimed={onClaimed} /> : <ReferralsTab />}
         </div>
       </div>
     </div>
@@ -128,7 +158,7 @@ function TabButton({
 // ----------------------------------------------------------------------------
 // Pestaña de hazañas
 // ----------------------------------------------------------------------------
-function AchievementsTab() {
+function AchievementsTab({ onClaimed }: { onClaimed: () => void }) {
   const [data, setData] = useState<AchievementsData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -163,7 +193,7 @@ function AchievementsTab() {
       {data.completed.length > 0 && (
         <Section title={`Completadas (${data.completed.length})`}>
           {data.completed.map((a) => (
-            <CompletedCard key={a.def.id} a={a} />
+            <CompletedCard key={a.def.id} a={a} onClaimed={onClaimed} />
           ))}
         </Section>
       )}
@@ -218,12 +248,66 @@ function AvailableCard({ a }: { a: AchievementProgress }) {
   );
 }
 
-function CompletedCard({ a }: { a: AchievementProgress }) {
+function CompletedCard({ a, onClaimed }: { a: AchievementProgress; onClaimed: () => void }) {
+  // Estado de canje local: arranca de claimedAt y se vuelve true tras reclamar, sin
+  // depender de recargar la lista (el padre solo refresca recursos y el badge).
+  const [claimed, setClaimed] = useState(a.claimedAt !== null);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const claim = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/achievements/claim/${a.def.id}`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? "No se pudo reclamar la recompensa.");
+      setFeedback(formatRewardObtained(d.reward ?? a.def.reward));
+      setClaimed(true);
+      onClaimed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al reclamar.");
+    } finally {
+      setBusy(false);
+    }
+  }, [a.def.id, a.def.reward, onClaimed]);
+
+  // Pendiente de canje: condición cumplida pero recompensa sin reclamar.
+  if (!claimed) {
+    return (
+      <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-amber-200">✓ {a.def.title}</p>
+            <p className="truncate text-xs text-zinc-500">{a.def.description}</p>
+          </div>
+          <span className="shrink-0 rounded bg-zinc-800 px-2 py-0.5 text-xs text-emerald-300">
+            {formatReward(a.def.reward)}
+          </span>
+        </div>
+        <button
+          onClick={claim}
+          disabled={busy}
+          className="mt-2 w-full rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500 disabled:opacity-50"
+        >
+          {busy ? "Reclamando…" : "Reclamar recompensa"}
+        </button>
+        {error && <p className="mt-1.5 text-xs text-rose-400">⚠️ {error}</p>}
+      </div>
+    );
+  }
+
+  // Reclamada: recompensa ya aplicada.
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-900/50 bg-emerald-950/20 px-3 py-2">
       <div className="min-w-0">
         <p className="text-sm font-medium text-emerald-200">✓ {a.def.title}</p>
-        <p className="truncate text-xs text-zinc-500">{a.def.description}</p>
+        {feedback ? (
+          <p className="truncate text-xs text-emerald-400">{feedback} obtenida</p>
+        ) : (
+          <p className="truncate text-xs text-zinc-500">{a.def.description}</p>
+        )}
       </div>
       <span className="shrink-0 text-xs text-emerald-400">{formatReward(a.def.reward)}</span>
     </div>

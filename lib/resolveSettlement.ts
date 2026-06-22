@@ -24,7 +24,11 @@ import {
 } from "./gameConfig";
 import { BuildingType, EventType } from "./generated/prisma/enums";
 import type { Prisma } from "./generated/prisma/client";
-import { evaluateAchievements, type CompletedAchievement } from "./achievements";
+import {
+  countPendingClaims,
+  evaluateAchievements,
+  type CompletedAchievement,
+} from "./achievements";
 import { maybeActivateReferral } from "./referrals";
 
 // Paso de simulación. Pequeño para que los bucles de realimentación (bienestar,
@@ -455,6 +459,8 @@ export async function resolveWithinTx(
 export interface LoadedSettlement extends ResolvedSettlement {
   newAchievements: CompletedAchievement[];
   referralActivated: boolean;
+  // Nº de hazañas completadas pendientes de canje (badge de navegación).
+  pendingClaims: number;
 }
 
 /**
@@ -475,6 +481,7 @@ export async function resolveSettlement(settlementId: string): Promise<LoadedSet
     });
     const referralActivated = await maybeActivateReferral(tx, s);
     const newAchievements = await evaluateAchievements(tx, settlementId);
-    return { ...resolved, newAchievements, referralActivated };
+    const pendingClaims = await countPendingClaims(tx, s.userId);
+    return { ...resolved, newAchievements, referralActivated, pendingClaims };
   });
 }

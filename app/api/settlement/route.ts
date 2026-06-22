@@ -17,7 +17,8 @@ export async function GET() {
 
   try {
     const settlementId = await getOrCreateSettlementForUser(session.user.id);
-    const { summary, newAchievements, referralActivated } = await resolveSettlement(settlementId);
+    const { summary, newAchievements, referralActivated, pendingClaims } =
+      await resolveSettlement(settlementId);
     const view = await getSettlementView(settlementId);
     // El username se muestra en la UI (no el email). Puede ser null en cuentas de
     // Google; el cliente cae entonces a la parte local del email.
@@ -31,6 +32,7 @@ export async function GET() {
       summary,
       newAchievements,
       referralActivated,
+      pendingClaims,
       player: {
         email: session.user.email,
         name: session.user.name,

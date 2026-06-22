@@ -23,9 +23,14 @@ export async function GET() {
     });
     const done = await prisma.userAchievement.findMany({
       where: { userId: session.user.id },
-      select: { achievementId: true, completedAt: true },
+      select: { achievementId: true, completedAt: true, claimedAt: true },
     });
-    const completedMap = new Map(done.map((d) => [d.achievementId, d.completedAt]));
+    const completedMap = new Map(
+      done.map((d) => [
+        d.achievementId,
+        { completedAt: d.completedAt, claimedAt: d.claimedAt },
+      ]),
+    );
     const values = currentValues(settlement);
     return NextResponse.json(categorizeAchievements(completedMap, values));
   } catch (err) {

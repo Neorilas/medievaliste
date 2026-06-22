@@ -50,10 +50,15 @@ model User {
 // que el resto del balance en lib/gameConfig.ts. Aquí solo se persiste el hecho
 // de haber completado una hazaña (por su id de definición) y cuándo.
 model UserAchievement {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   userId        String
   achievementId String // id de la definición en lib/achievements.ts (p. ej. "wood_1")
-  completedAt   DateTime @default(now())
+  completedAt   DateTime  @default(now())
+  // Cuándo reclamó el jugador la recompensa (canje manual). La recompensa SOLO se
+  // aplica al reclamar, nunca al detectar la completitud.
+  //   completedAt != null + claimedAt == null → completada, pendiente de canje
+  //   claimedAt != null                       → reclamada, recompensa ya aplicada
+  claimedAt     DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
