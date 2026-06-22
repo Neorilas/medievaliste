@@ -6,6 +6,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import bcrypt from "bcryptjs";
 import { authConfig } from "./auth.config";
 import { prisma } from "./lib/prisma";
+import { looksLikeEmail, normalizeEmail, normalizeUsername } from "./lib/accountValidation";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
@@ -15,15 +16,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     ...authConfig.providers,
     Credentials({
       credentials: {
-        email: { label: "Email", type: "email" },
+        // Un solo campo: el jugador escribe su email O su nombre de usuario.
+        identifier: { label: "Email o nombre de usuario", type: "text" },
         password: { label: "Contraseña", type: "password" },
       },
       async authorize(creds) {
-        const email = (creds?.email as string | undefined)?.toLowerCase().trim();
+        const identifier = (creds?.identifier as string | undefined)?.trim();
         const password = creds?.password as string | undefined;
-        if (!email || !password) return null;
+        if (!identifier || !password) return null;
 
-        const user = await prisma.user.findUnique({ where: { email } });
+        // Si contiene @ lo tratamos como email; si no, como username (en minúsculas).
+        const user = looksLikeEmail(identifier)
+          ? await prisma.user.findUnique({ where: { email: normalizeEmail(identifier) } })
+          : await prisma.user.findUnique({ where: { username: normalizeUsername(identifier) } });
         if (!user?.passwordHash) return null; // sin contraseña (p. ej. solo Google)
 
         const valid = await bcrypt.compare(password, user.passwordHash);

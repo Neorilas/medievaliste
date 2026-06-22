@@ -8,6 +8,7 @@
 // viva en /(game). Mientras no haya login ni landing, el juego vive aquí directo.
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -81,7 +82,94 @@ function CostTag({ cost }: { cost: Cost }) {
   return <span className="text-xs text-zinc-400">{parts.join("  ")}</span>;
 }
 
+// Nombre del asentamiento, editable inline (CAMBIO 1). 1 cambio cada 24h.
+function SettlementName({
+  name,
+  renameInfo,
+  onRename,
+}: {
+  name: string;
+  renameInfo: SettlementView["rename"];
+  onRename: (name: string) => Promise<string | null>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    const err = await onRename(value.trim());
+    setSaving(false);
+    if (err) {
+      setError(err);
+      return;
+    }
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center gap-2">
+        <h1 className="truncate text-xl font-semibold">{name}</h1>
+        <button
+          onClick={() => {
+            setValue(name);
+            setError(null);
+            setEditing(true);
+          }}
+          disabled={!renameInfo.canRename}
+          title={
+            renameInfo.canRename
+              ? "Cambiar el nombre"
+              : `Podrás cambiarlo en ${fmtDuration(renameInfo.cooldownSecondsRemaining)}`
+          }
+          className="text-sm text-zinc-500 hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="Cambiar nombre"
+        >
+          ✏️
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5">
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          maxLength={32}
+          className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-lg font-semibold outline-none focus:border-indigo-500"
+        />
+        <button
+          onClick={save}
+          disabled={saving}
+          className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {saving ? "…" : "Guardar"}
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+        >
+          Cancelar
+        </button>
+      </div>
+      <p className="text-xs text-zinc-500">Solo puedes cambiar el nombre una vez cada 24 h.</p>
+      {error && <p className="text-xs text-rose-400">⚠️ {error}</p>}
+    </div>
+  );
+}
+
 export default function Game() {
+  const router = useRouter();
   const [view, setView] = useState<SettlementView | null>(null);
   const [player, setPlayer] = useState<PlayerInfo | null>(null);
   const [summary, setSummary] = useState<ResolveSummary | null>(null);
@@ -93,17 +181,25 @@ export default function Game() {
   // Carga el estado del asentamiento (resuelve el cálculo diferido en el servidor).
   // `showAway` controla si se muestra el resumen de "mientras no estabas" (solo al
   // entrar, no en los refrescos automáticos al terminar una obra).
-  const load = useCallback(async (showAway: boolean) => {
-    const res = await fetch("/api/settlement");
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? "Error al cargar");
-    setView(data.settlement);
-    setPlayer(data.player ?? null);
-    if (showAway && isNotableSummary(data.summary)) {
-      setSummary(data.summary);
-      setShowSummary(true);
-    }
-  }, []);
+  const load = useCallback(
+    async (showAway: boolean) => {
+      const res = await fetch("/api/settlement");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error al cargar");
+      // Onboarding pendiente: sin región, al selector de región (CAMBIO 3).
+      if (!data.settlement?.region) {
+        router.replace("/onboarding");
+        return;
+      }
+      setView(data.settlement);
+      setPlayer(data.player ?? null);
+      if (showAway && isNotableSummary(data.summary)) {
+        setSummary(data.summary);
+        setShowSummary(true);
+      }
+    },
+    [router],
+  );
 
   // Carga inicial.
   useEffect(() => {
@@ -163,6 +259,23 @@ export default function Game() {
     }
   }, []);
 
+  // Renombre del asentamiento (CAMBIO 1). Devuelve mensaje de error o null.
+  const rename = useCallback(async (name: string): Promise<string | null> => {
+    try {
+      const res = await fetch("/api/settlement/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) return data.error ?? "No se pudo renombrar.";
+      setView(data.settlement);
+      return null;
+    } catch {
+      return "Error de red al renombrar.";
+    }
+  }, []);
+
   if (error && !view) {
     return (
       <main className="flex flex-1 items-center justify-center bg-zinc-950 p-6 text-zinc-100">
@@ -189,15 +302,17 @@ export default function Game() {
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-4 bg-zinc-950 px-4 py-5 text-zinc-100">
       {/* Cabecera */}
       <header className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{view.name}</h1>
-          <span className="text-sm text-zinc-400">
+        <div className="min-w-0">
+          <SettlementName name={view.name} renameInfo={view.rename} onRename={rename} />
+          <span className="block text-sm text-zinc-400">
             {BUILDING_ICON.TOWN_HALL} Ayuntamiento N{view.townHallLevel}
+            {view.regionName && <> · 🗺️ {view.regionName}</>}
           </span>
         </div>
         <div className="flex flex-col items-end gap-1">
           {player?.email && <span className="text-xs text-zinc-500">{player.name ?? player.email}</span>}
           <div className="flex items-center gap-3">
+            <Link href="/map" className="text-xs text-indigo-400 hover:text-indigo-300">Mapa</Link>
             {player?.isAdmin && (
               <Link href="/admin" className="text-xs text-amber-400 hover:text-amber-300">Admin</Link>
             )}

@@ -25,7 +25,9 @@ import {
   CONSUMPTION,
 } from "./gameConfig";
 import { validateAction, type Cost, type SettlementSnapshot } from "./validation";
-import { BuildingType } from "./generated/prisma/enums";
+import { BuildingType, Region } from "./generated/prisma/enums";
+import { REGIONS } from "./regionConfig";
+import { renameCooldownRemaining } from "./settlementIdentity";
 
 // Tipos de edificio que el jugador puede construir (el Ayuntamiento ya existe).
 const BUILDABLE: BuildingType[] = [
@@ -114,6 +116,14 @@ export interface TownHallUpgrade {
 export interface SettlementView {
   id: string;
   name: string;
+  // Renombre (CAMBIO 1): cuánto falta para poder volver a cambiar el nombre.
+  rename: {
+    canRename: boolean;
+    cooldownSecondsRemaining: number; // 0 si ya puede
+  };
+  // Región (CAMBIO 3): null si el jugador aún no la ha elegido (onboarding pendiente).
+  region: Region | null;
+  regionName: string | null;
   townHallLevel: number;
   maxBuildings: number;
   maxOtherLevel: number;
@@ -246,9 +256,17 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
   const foodConsumption = s.population * CONSUMPTION.foodPerColonistPerHour;
   const assigned = s.buildings.reduce((a, b) => a + b.workers, 0);
 
+  const cooldownRemaining = renameCooldownRemaining(s.nameChangedAt);
+
   return {
     id: s.id,
     name: s.name,
+    rename: {
+      canRename: cooldownRemaining === 0,
+      cooldownSecondsRemaining: cooldownRemaining,
+    },
+    region: s.region,
+    regionName: s.region ? REGIONS[s.region].name : null,
     townHallLevel: s.townHallLevel,
     maxBuildings: tier.maxBuildings,
     maxOtherLevel: tier.maxOtherLevel,

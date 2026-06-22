@@ -308,6 +308,16 @@ export function constructionSeconds(type: BuildingType, targetLevel: number): nu
 }
 
 // ----------------------------------------------------------------------------
+// Identidad del asentamiento: renombre.
+// El jugador puede renombrar su asentamiento, pero solo 1 vez cada 24h.
+// ----------------------------------------------------------------------------
+export const SETTLEMENT_NAME = {
+  cooldownHours: 24,
+  minLength: 3,
+  maxLength: 32,
+} as const;
+
+// ----------------------------------------------------------------------------
 // Eventos (§6): plaga.
 // ----------------------------------------------------------------------------
 export const PLAGUE = {

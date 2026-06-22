@@ -1,49 +1,73 @@
 "use client";
 
 // Formulario de acceso reutilizable para /login y /register.
-// - Credenciales (email/contraseña): en registro llama a /api/register y luego inicia sesión.
+// - Registro: email + nombre de usuario + contraseña → /api/register y luego inicia sesión.
+// - Login: un solo campo "email o nombre de usuario" + contraseña.
 // - Google: solo si está configurado en el servidor (googleEnabled).
 
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useState } from "react";
+import {
+  USERNAME_MIN,
+  USERNAME_MAX,
+  PASSWORD_MIN,
+} from "@/lib/accountValidation";
 
 export function AuthForm({ mode, googleEnabled }: { mode: "login" | "register"; googleEnabled: boolean }) {
+  const isRegister = mode === "register";
+
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [identifier, setIdentifier] = useState(""); // login: email o username
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<string | null>(null); // "email" | "username" | "password"
   const [busy, setBusy] = useState(false);
-
-  const isRegister = mode === "register";
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setFieldError(null);
     try {
       if (isRegister) {
         const res = await fetch("/api/register", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, password }),
+          body: JSON.stringify({ email, username, password }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "No se pudo crear la cuenta.");
+        if (!res.ok) {
+          if (typeof data.field === "string") setFieldError(data.field);
+          throw new Error(data.error ?? "No se pudo crear la cuenta.");
+        }
       }
-      // Inicia sesión con credenciales. redirect:false para poder mostrar el error.
-      const result = (await signIn("credentials", { email, password, redirect: false })) as
-        | { error?: string }
-        | undefined;
+      // Inicia sesión con credenciales. En registro, el identificador es el email.
+      const result = (await signIn("credentials", {
+        identifier: isRegister ? email : identifier,
+        password,
+        redirect: false,
+      })) as { error?: string } | undefined;
       if (result?.error) {
-        throw new Error("Email o contraseña incorrectos.");
+        throw new Error(
+          isRegister
+            ? "Cuenta creada, pero no se pudo iniciar sesión. Prueba a entrar."
+            : "Email/usuario o contraseña incorrectos.",
+        );
       }
-      window.location.href = "/"; // éxito → al juego
+      window.location.href = "/"; // éxito → al juego (u onboarding)
       return;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error.");
       setBusy(false);
     }
   }
+
+  const inputClass =
+    "rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-indigo-500";
+  const errorInputClass =
+    "rounded-lg border border-rose-700 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-rose-500";
 
   return (
     <div className="w-full max-w-sm">
@@ -67,22 +91,46 @@ export function AuthForm({ mode, googleEnabled }: { mode: "login" | "register"; 
       )}
 
       <form onSubmit={onSubmit} className="flex flex-col gap-3">
-        <input
-          type="email"
-          required
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-indigo-500"
-        />
+        {isRegister ? (
+          <>
+            <input
+              type="email"
+              required
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={fieldError === "email" ? errorInputClass : inputClass}
+            />
+            <input
+              type="text"
+              required
+              minLength={USERNAME_MIN}
+              maxLength={USERNAME_MAX}
+              placeholder={`Nombre de usuario (${USERNAME_MIN}–${USERNAME_MAX}, letras, números, _ -)`}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className={fieldError === "username" ? errorInputClass : inputClass}
+            />
+          </>
+        ) : (
+          <input
+            type="text"
+            required
+            placeholder="Email o nombre de usuario"
+            autoCapitalize="none"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
+            className={inputClass}
+          />
+        )}
         <input
           type="password"
           required
-          minLength={isRegister ? 8 : undefined}
-          placeholder={isRegister ? "Contraseña (mín. 8 caracteres)" : "Contraseña"}
+          minLength={isRegister ? PASSWORD_MIN : undefined}
+          placeholder={isRegister ? `Contraseña (mín. ${PASSWORD_MIN} caracteres)` : "Contraseña"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-indigo-500"
+          className={fieldError === "password" ? errorInputClass : inputClass}
         />
         {error && <p className="text-sm text-rose-400">⚠️ {error}</p>}
         <button
