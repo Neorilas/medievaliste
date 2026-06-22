@@ -24,6 +24,8 @@ import {
 } from "./gameConfig";
 import { BuildingType, EventType } from "./generated/prisma/enums";
 import type { Prisma } from "./generated/prisma/client";
+import { evaluateAchievements, type CompletedAchievement } from "./achievements";
+import { maybeActivateReferral } from "./referrals";
 
 // Paso de simulación. Pequeño para que los bucles de realimentación (bienestar,
 // hambre, crecimiento, pérdida) se resuelvan con la configuración correcta en
@@ -82,6 +84,11 @@ export interface ResolveSummary {
   colonistsLost: number;
   buildingsCompleted: number; // obras (construcciones/mejoras) terminadas en el tramo
   plagueActive: boolean;
+  // Producción BRUTA del tramo (antes de consumo y tope de almacén). Alimenta los
+  // contadores acumulados del asentamiento para las hazañas total_*_produced.
+  producedFood: number;
+  producedWood: number;
+  producedStone: number;
 }
 
 export interface SimResult {
@@ -162,6 +169,10 @@ export function simulate(
   let colonistsArrived = 0;
   let colonistsLost = 0;
   let buildingsCompleted = 0;
+  // Producción bruta acumulada del tramo (no descuenta consumo ni tope de almacén).
+  let producedFood = 0;
+  let producedWood = 0;
+  let producedStone = 0;
 
   // Completa las obras cuyo `constructionEndsAt` ya pasó en el instante `atMs`:
   // sube el edificio a `level + 1` (0→1 si era nuevo) y libera la obra. Si es el
@@ -218,6 +229,12 @@ export function simulate(
     const foodRate = ratePerHour(state.buildings, "food");
     const woodRate = ratePerHour(state.buildings, "wood");
     const stoneRate = ratePerHour(state.buildings, "stone");
+
+    // Producción bruta del tramo (para los contadores acumulados de las hazañas):
+    // lo que producen los edificios, antes de consumo y antes del tope de almacén.
+    producedFood += foodRate * h;
+    producedWood += woodRate * h;
+    producedStone += stoneRate * h;
 
     state.food = Math.min(cap, state.food + foodRate * h);
     state.wood = Math.min(cap, state.wood + woodRate * h);
@@ -299,6 +316,9 @@ export function simulate(
     colonistsLost,
     buildingsCompleted,
     plagueActive: plagueSeen,
+    producedFood,
+    producedWood,
+    producedStone,
   };
 
   return { state, newEvents, summary };
@@ -375,6 +395,10 @@ export async function resolveWithinTx(
       growthProgress: state.growthProgress,
       famineProgress: state.famineProgress,
       lastTick: now,
+      // Acumular la producción bruta del tramo (para las hazañas total_*_produced).
+      totalFoodProduced: { increment: summary.producedFood },
+      totalWoodProduced: { increment: summary.producedWood },
+      totalStoneProduced: { increment: summary.producedStone },
     },
   });
 
@@ -416,13 +440,30 @@ export async function resolveWithinTx(
   return { summary, newEvents };
 }
 
+/** Resultado de cargar el asentamiento: incluye reacciones (hazañas, referidos). */
+export interface LoadedSettlement extends ResolvedSettlement {
+  newAchievements: CompletedAchievement[];
+  referralActivated: boolean;
+}
+
 /**
  * Recalcula el estado diferido de un asentamiento y lo persiste, en su propia
- * transacción. Llamar al abrir la app (GET /api/settlement).
+ * transacción. Llamar al abrir la app (GET /api/settlement). Tras recalcular,
+ * evalúa hazañas (producción acumulada, crecimiento de población, obras terminadas)
+ * y activa la recompensa de referido si el Ayuntamiento acaba de llegar a N2.
  */
-export async function resolveSettlement(settlementId: string): Promise<ResolvedSettlement> {
+export async function resolveSettlement(settlementId: string): Promise<LoadedSettlement> {
   const now = new Date();
   // Import diferido: mantiene `simulate` puro y testeable sin tocar la DB.
   const { prisma } = await import("./prisma");
-  return prisma.$transaction((tx) => resolveWithinTx(tx, settlementId, now));
+  return prisma.$transaction(async (tx) => {
+    const resolved = await resolveWithinTx(tx, settlementId, now);
+    const s = await tx.settlement.findUniqueOrThrow({
+      where: { id: settlementId },
+      select: { userId: true, townHallLevel: true },
+    });
+    const referralActivated = await maybeActivateReferral(tx, s);
+    const newAchievements = await evaluateAchievements(tx, settlementId);
+    return { ...resolved, newAchievements, referralActivated };
+  });
 }

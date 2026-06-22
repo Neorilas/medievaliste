@@ -17,11 +17,15 @@ import {
 } from "./validation";
 import { constructionSeconds } from "./gameConfig";
 import { BuildingType } from "./generated/prisma/enums";
+import { evaluateAchievements, type CompletedAchievement } from "./achievements";
+import { maybeActivateReferral } from "./referrals";
 
 export class ActionError extends Error {}
 
 export interface ApplyActionResult {
   summary: ResolveSummary; // lo ocurrido mientras no estaba (al cerrar el tramo)
+  newAchievements: CompletedAchievement[]; // hazañas completadas por esta acción
+  referralActivated: boolean; // el Ayuntamiento llegó a N2 y activó un referido
 }
 
 function buildSnapshot(settlement: {
@@ -149,6 +153,15 @@ export async function applyAction(
       }
     }
 
-    return { summary };
+    // Reacciones al cambio, sobre el estado ya actualizado: activar referido (si el
+    // Ayuntamiento acaba de subir) y evaluar hazañas (edificios, asignación, etc.).
+    const fresh = await tx.settlement.findUniqueOrThrow({
+      where: { id: settlementId },
+      select: { userId: true, townHallLevel: true },
+    });
+    const referralActivated = await maybeActivateReferral(tx, fresh);
+    const newAchievements = await evaluateAchievements(tx, settlementId);
+
+    return { summary, newAchievements, referralActivated };
   });
 }

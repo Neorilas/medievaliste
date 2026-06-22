@@ -20,7 +20,10 @@ export const authConfig = {
       const isLoggedIn = !!auth?.user;
       const path = request.nextUrl.pathname;
       const isPublic =
-        path === "/login" || path === "/register" || path.startsWith("/api/auth");
+        path === "/login" ||
+        path === "/register" ||
+        path === "/join" ||
+        path.startsWith("/api/auth");
       if (isPublic) return true;
       return isLoggedIn; // todo lo demás (juego, admin) requiere login
     },

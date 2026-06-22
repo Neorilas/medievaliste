@@ -28,9 +28,37 @@ model User {
   passwordHash  String? // solo para login con email/contraseña (null si solo usa Google)
   createdAt     DateTime  @default(now())
 
-  accounts   Account[]
-  sessions   Session[]
-  settlement Settlement?
+  // --- Referidos (Bloque 3) ---
+  // Código único e inmutable que comparte el jugador en su enlace de invitación.
+  referralCode     String    @unique @default(cuid())
+  // Quién invitó a este usuario (null = registro orgánico, sin referidor).
+  referredById     String?
+  referredBy       User?     @relation("Referrals", fields: [referredById], references: [id])
+  referrals        User[]    @relation("Referrals")
+  // Cuándo se entregó la recompensa al referidor (al llegar ESTE usuario a Ayto. N2).
+  // null = aún no entregada. Garantiza que la recompensa se paga una sola vez.
+  referralRewardAt DateTime?
+
+  accounts     Account[]
+  sessions     Session[]
+  settlement   Settlement?
+  achievements UserAchievement[]
+}
+
+// Hazañas COMPLETADAS por un usuario. Las DEFINICIONES de hazañas (título,
+// condición, recompensa) NO viven en la BD: viven en lib/achievements.ts, igual
+// que el resto del balance en lib/gameConfig.ts. Aquí solo se persiste el hecho
+// de haber completado una hazaña (por su id de definición) y cuándo.
+model UserAchievement {
+  id            String   @id @default(cuid())
+  userId        String
+  achievementId String // id de la definición en lib/achievements.ts (p. ej. "wood_1")
+  completedAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
 }
 
 // Tablas estándar de Auth.js (adaptador de Prisma).
@@ -91,6 +119,14 @@ model Settlement {
   wood    Float @default(0)
   stone   Float @default(0)
   welfare Float @default(100) // bienestar, arranca al 100%
+
+  // Producción BRUTA acumulada (Bloque 3): suma de todo lo producido a lo largo de
+  // la vida del asentamiento, sin restar consumo ni topes de almacén. Solo crece.
+  // La usan las hazañas de tipo `total_*_produced`. El motor diferido lo incrementa
+  // en cada recálculo con la producción bruta del tramo.
+  totalFoodProduced  Float @default(0)
+  totalWoodProduced  Float @default(0)
+  totalStoneProduced Float @default(0)
 
   // Población
   population Int @default(3) // colonos totales (asignados + libres)

@@ -60,9 +60,9 @@ export async function POST(request: Request) {
 
   try {
     const settlementId = await getOrCreateSettlementForUser(session.user.id);
-    const { summary } = await applyAction(settlementId, action);
+    const { summary, newAchievements, referralActivated } = await applyAction(settlementId, action);
     const view = await getSettlementView(settlementId);
-    return NextResponse.json({ settlement: view, summary });
+    return NextResponse.json({ settlement: view, summary, newAchievements, referralActivated });
   } catch (err) {
     if (err instanceof ActionError) {
       return NextResponse.json({ error: err.message }, { status: 400 });

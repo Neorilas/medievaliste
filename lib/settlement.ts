@@ -32,6 +32,7 @@ import { BuildingType, Region } from "./generated/prisma/enums";
 import { REGIONS } from "./regionConfig";
 import { renameCooldownRemaining } from "./settlementIdentity";
 import { parseTutorialProgress, type TutorialProgress } from "./tutorial";
+import { REFERRAL_REWARD } from "./referrals";
 
 // Tipos de edificio que el jugador puede construir (el Ayuntamiento ya existe).
 const BUILDABLE: BuildingType[] = [
@@ -53,15 +54,24 @@ export async function getOrCreateSettlementForUser(userId: string): Promise<stri
   });
   if (existing) return existing.id;
 
+  // Bonus de bienvenida por referido (Bloque 3): si el usuario se registró con un
+  // enlace de invitación válido, su asentamiento arranca con 25 de cada recurso
+  // extra. Se aplica aquí (creación única) para no duplicarlo.
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { referredById: true },
+  });
+  const bonus = user?.referredById ? REFERRAL_REWARD : { wood: 0, food: 0, stone: 0 };
+
   // Crea el asentamiento inicial + edificios de partida para este usuario.
   const settlement = await prisma.settlement.create({
     data: {
       userId,
       name: "Mi Asentamiento",
       townHallLevel: INITIAL.townHallLevel,
-      food: INITIAL.food,
-      wood: INITIAL.wood,
-      stone: INITIAL.stone,
+      food: INITIAL.food + bonus.food,
+      wood: INITIAL.wood + bonus.wood,
+      stone: INITIAL.stone + bonus.stone,
       welfare: INITIAL.welfare,
       population: INITIAL.population,
       buildings: {

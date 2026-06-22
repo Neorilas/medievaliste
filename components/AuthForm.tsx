@@ -7,12 +7,13 @@
 
 import Link from "next/link";
 import { signIn } from "next-auth/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   USERNAME_MIN,
   USERNAME_MAX,
   PASSWORD_MIN,
 } from "@/lib/accountValidation";
+import { REFERRAL_STORAGE_KEY } from "@/app/join/page";
 
 export function AuthForm({ mode, googleEnabled }: { mode: "login" | "register"; googleEnabled: boolean }) {
   const isRegister = mode === "register";
@@ -24,6 +25,17 @@ export function AuthForm({ mode, googleEnabled }: { mode: "login" | "register"; 
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null); // "email" | "username" | "password"
   const [busy, setBusy] = useState(false);
+  // Código de referido guardado por /join (si el usuario llegó por una invitación).
+  const [ref, setRef] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isRegister) return;
+    try {
+      setRef(sessionStorage.getItem(REFERRAL_STORAGE_KEY));
+    } catch {
+      // sessionStorage no disponible: registro normal sin referido.
+    }
+  }, [isRegister]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,12 +47,18 @@ export function AuthForm({ mode, googleEnabled }: { mode: "login" | "register"; 
         const res = await fetch("/api/register", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, username, password }),
+          body: JSON.stringify({ email, username, password, ref: ref ?? undefined }),
         });
         const data = await res.json();
         if (!res.ok) {
           if (typeof data.field === "string") setFieldError(data.field);
           throw new Error(data.error ?? "No se pudo crear la cuenta.");
+        }
+        // Registro correcto: el código de referido ya se usó, lo limpiamos.
+        try {
+          sessionStorage.removeItem(REFERRAL_STORAGE_KEY);
+        } catch {
+          // ignorar
         }
       }
       // Inicia sesión con credenciales. En registro, el identificador es el email.
@@ -75,6 +93,12 @@ export function AuthForm({ mode, googleEnabled }: { mode: "login" | "register"; 
       <p className="mb-6 text-sm text-zinc-400">
         {isRegister ? "Crea tu cuenta para empezar a colonizar." : "Entra para gestionar tu asentamiento."}
       </p>
+
+      {isRegister && ref && (
+        <p className="mb-4 rounded-lg border border-emerald-800 bg-emerald-950/40 px-3 py-2 text-sm text-emerald-300">
+          🎁 Te unes con una invitación: empezarás con 25 de madera, comida y piedra.
+        </p>
+      )}
 
       {googleEnabled && (
         <>

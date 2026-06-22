@@ -27,6 +27,8 @@ export async function POST(request: Request) {
   const email = typeof b.email === "string" ? normalizeEmail(b.email) : "";
   const username = typeof b.username === "string" ? normalizeUsername(b.username) : "";
   const password = typeof b.password === "string" ? b.password : "";
+  // Código de referido (opcional): viene del enlace /join?ref=CODE.
+  const ref = typeof b.ref === "string" ? b.ref.trim() : "";
 
   if (!isValidEmail(email)) {
     return NextResponse.json({ error: "Email no válido.", field: "email" }, { status: 400 });
@@ -58,9 +60,21 @@ export async function POST(request: Request) {
     );
   }
 
+  // Resolver el referidor por su código, si vino uno válido. Un código inválido o
+  // ausente simplemente se ignora (registro orgánico). El bonus de bienvenida se
+  // entrega al crear el asentamiento (ver getOrCreateSettlementForUser).
+  let referredById: string | null = null;
+  if (ref) {
+    const referrer = await prisma.user.findUnique({
+      where: { referralCode: ref },
+      select: { id: true },
+    });
+    if (referrer) referredById = referrer.id;
+  }
+
   const passwordHash = await bcrypt.hash(password, 10);
   try {
-    await prisma.user.create({ data: { email, username, passwordHash } });
+    await prisma.user.create({ data: { email, username, passwordHash, referredById } });
   } catch {
     // Carrera entre la comprobación y el create (índice único): genérico.
     return NextResponse.json(

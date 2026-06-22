@@ -10,7 +10,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BuildOption,
   BuildingView,
@@ -19,6 +19,7 @@ import type {
 } from "@/lib/settlement";
 import type { StatDelta } from "@/lib/gameConfig";
 import type { ResolveSummary } from "@/lib/resolveSettlement";
+import type { CompletedAchievement } from "@/lib/achievements";
 import type { TutorialStepId } from "@/lib/tutorial";
 import {
   TutorialProvider,
@@ -26,11 +27,19 @@ import {
   useTutorial,
   useTutorialAnchor,
 } from "@/components/Tutorial";
+import { AchievementsPanel, formatReward } from "@/components/AchievementsPanel";
+import { ToastStack, type Toast } from "@/components/GameToasts";
 
 interface PlayerInfo {
   email?: string | null;
   name?: string | null;
+  username?: string | null;
   isAdmin?: boolean;
+}
+
+/** Nombre visible del jugador: name, si no username, si no la parte local del email. */
+function displayPlayerName(player: PlayerInfo): string {
+  return player.name ?? player.username ?? player.email?.split("@")[0] ?? "Jugador";
 }
 
 // --- Etiquetas e iconos (clave = string del enum BuildingType) ---
@@ -178,30 +187,32 @@ function SettlementName({
     );
   }
 
+  // En móvil el input y los botones se apilan: así "Guardar" queda SIEMPRE visible
+  // (antes, en horizontal, lo tapaban el email y el enlace del mapa de la cabecera).
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5">
-        <input
-          autoFocus
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") save();
-            if (e.key === "Escape") setEditing(false);
-          }}
-          maxLength={32}
-          className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-lg font-semibold outline-none focus:border-indigo-500"
-        />
+    <div className="flex w-full flex-col gap-2">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        maxLength={32}
+        className="w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-lg font-semibold outline-none focus:border-indigo-500"
+      />
+      <div className="flex gap-2">
         <button
           onClick={save}
           disabled={saving}
-          className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium hover:bg-indigo-500 disabled:opacity-50"
+          className="flex-1 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
         >
-          {saving ? "…" : "Guardar"}
+          {saving ? "Guardando…" : "Guardar"}
         </button>
         <button
           onClick={() => setEditing(false)}
-          className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+          className="flex-1 rounded bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
         >
           Cancelar
         </button>
@@ -221,6 +232,38 @@ export default function Game() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastId = useRef(0);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((ts) => ts.filter((t) => t.id !== id));
+  }, []);
+
+  // Empuja toasts a partir de las reacciones del servidor (hazañas + referido).
+  const pushReactions = useCallback(
+    (newAchievements?: CompletedAchievement[], referralActivated?: boolean) => {
+      const next: Toast[] = [];
+      for (const a of newAchievements ?? []) {
+        next.push({
+          id: ++toastId.current,
+          kind: "achievement",
+          title: `🏆 ${a.title}`,
+          subtitle: `Recompensa: ${formatReward(a.reward)}`,
+        });
+      }
+      if (referralActivated) {
+        next.push({
+          id: ++toastId.current,
+          kind: "referral",
+          title: "🎉 ¡Invitación activada!",
+          subtitle: "Quien te invitó ha recibido 25 de cada recurso.",
+        });
+      }
+      if (next.length > 0) setToasts((ts) => [...ts, ...next]);
+    },
+    [],
+  );
 
   // Carga el estado del asentamiento (resuelve el cálculo diferido en el servidor).
   // `showAway` controla si se muestra el resumen de "mientras no estabas" (solo al
@@ -241,8 +284,9 @@ export default function Game() {
         setSummary(data.summary);
         setShowSummary(true);
       }
+      pushReactions(data.newAchievements, data.referralActivated);
     },
-    [router],
+    [router, pushReactions],
   );
 
   // Carga inicial.
@@ -296,12 +340,13 @@ export default function Game() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Acción no válida");
       setView(data.settlement);
+      pushReactions(data.newAchievements, data.referralActivated);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error");
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [pushReactions]);
 
   // Renombre del asentamiento (CAMBIO 1). Devuelve mensaje de error o null.
   const rename = useCallback(async (name: string): Promise<string | null> => {
@@ -354,8 +399,11 @@ export default function Game() {
         nowMs={nowMs}
         dispatch={dispatch}
         rename={rename}
+        onOpenPanel={() => setPanelOpen(true)}
       />
       <TutorialLayer />
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      {panelOpen && <AchievementsPanel onClose={() => setPanelOpen(false)} />}
     </TutorialProvider>
   );
 }
@@ -390,6 +438,7 @@ interface GameViewProps {
   nowMs: number;
   dispatch: (action: ActionBody) => void;
   rename: (name: string) => Promise<string | null>;
+  onOpenPanel: () => void;
 }
 
 // Toda la UI del asentamiento. Vive dentro de <TutorialProvider> para poder
@@ -405,6 +454,7 @@ function GameView({
   nowMs,
   dispatch,
   rename,
+  onOpenPanel,
 }: GameViewProps) {
   const { resources, population, rates, welfare } = view;
   const welfareDanger = welfare < 70;
@@ -436,8 +486,14 @@ function GameView({
           </span>
         </div>
         <div className="flex flex-col items-end gap-1">
-          {player?.email && <span className="text-xs text-zinc-500">{player.name ?? player.email}</span>}
+          {player && <span className="text-xs text-zinc-500">{displayPlayerName(player)}</span>}
           <div className="flex items-center gap-3">
+            <button
+              onClick={onOpenPanel}
+              className="text-xs text-amber-300 hover:text-amber-200"
+            >
+              🏆 Hazañas
+            </button>
             <Link href="/map" className="text-xs text-indigo-400 hover:text-indigo-300">Mapa</Link>
             {player?.isAdmin && (
               <Link href="/admin" className="text-xs text-amber-400 hover:text-amber-300">Admin</Link>
