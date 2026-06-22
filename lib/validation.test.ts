@@ -39,7 +39,7 @@ describe("build", () => {
   it("permite construir una casa con recursos suficientes", () => {
     const r = validateAction(snap(), { kind: "build", buildingType: BuildingType.HOUSE });
     expect(r.ok).toBe(true);
-    expect(r.cost).toEqual({ wood: 15 });
+    expect(r.cost).toEqual({ wood: 8 });
   });
 
   it("rechaza si no hay recursos", () => {

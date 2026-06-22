@@ -82,10 +82,13 @@ export const PRODUCERS: Partial<Record<BuildingType, ProducerConfig>> = {
     levelYieldFactor: 1.6,
     extraWorkerSlotsPerLevel: 1,
   },
-  // Serrería: 1 col → 2/h, 2 col → 5/h.
+  // Serrería: 1 col → 4/h, 2 col → 10/h (marginales 4 y 6). Producción duplicada
+  // respecto a la v0 original (2/h por colono) para acelerar el early game (Cambio A
+  // del bloque 4): la primera Casa y el primer aumento de producción se alcanzan
+  // mucho antes, evitando el abandono temprano.
   [BuildingType.SAWMILL]: {
     resource: "wood",
-    marginalsL1: [2, 3],
+    marginalsL1: [4, 6],
     levelYieldFactor: 1.6,
     extraWorkerSlotsPerLevel: 1,
   },
@@ -169,6 +172,11 @@ export const POPULATION = {
   capacityPerHouse: 2,
   // Crecimiento: +1 colono cada 24h de tiempo ELEGIBLE acumulado.
   hoursPerColonist: 24,
+  // El PRIMER colono nuevo llega mucho antes (Cambio A): ~10h en lugar de 24h. Una
+  // vez recibido el primero (Settlement.firstColonistReceived), el resto vuelve a la
+  // cadencia de 24h, preservando la restricción de diseño "máx. 1 colono / 24h" para
+  // el mid-game pero dando una primera recompensa de población rápida al inicio.
+  firstColonistHours: 10,
   // El bienestar debe estar por encima de este umbral para que crezca la población.
   growthWelfareThreshold: 70,
 } as const;
@@ -227,7 +235,9 @@ export const BUILD_MIN_TOWN_HALL: Partial<Record<BuildingType, number>> = {
 
 // Coste de CONSTRUIR un edificio nuevo (siempre a nivel 1).
 export const BUILD_COST: Partial<Record<BuildingType, Partial<Record<Resource, number>>>> = {
-  [BuildingType.HOUSE]: { wood: 15 },
+  // Casa: abaratada de 15 → 8 madera (Cambio A): con la Serrería ya duplicada, la
+  // primera Casa se construye en la primera visita, no a las ~8h.
+  [BuildingType.HOUSE]: { wood: 8 },
   [BuildingType.PLAZA]: { wood: 20 },
   [BuildingType.SAWMILL]: { wood: 15 },
   // La Cantera es la ÚNICA fuente de piedra; por eso su PRIMERA construcción no
@@ -342,6 +352,30 @@ export const SETTLEMENT_NAME = {
 export const PLAGUE = {
   // Drenaje extra de bienestar/hora mientras una plaga está activa.
   welfareDrainPerHour: 5,
+} as const;
+
+// ----------------------------------------------------------------------------
+// Eventos aleatorios (Bloque 4 §B): mercaderes, inclemencias, peregrini.
+//
+// Solo los NÚMEROS de balance viven aquí; la narrativa, el pool de personajes y
+// la lógica de generación/d100 viven en lib/events.ts (igual que las hazañas en
+// lib/achievements.ts). Generación diferida al abrir la app, sin cron.
+//
+// ⚠️ VALORES DE PARTIDA, a calibrar jugando.
+// ----------------------------------------------------------------------------
+export const EVENTS = {
+  // Ventana de "early game" desde la creación del asentamiento (días).
+  earlyGameDays: 3,
+  // Early game: un evento cada [min, max] horas (aleatorio dentro del rango).
+  earlyIntervalHoursMin: 12,
+  earlyIntervalHoursMax: 16,
+  // Fase normal (día 4+): probabilidad por hora de que salte un evento.
+  // (El documento la nombra EVENT_HOURLY_PROBABILITY.)
+  hourlyProbability: 0.035,
+  // Tope: si pasan estas horas sin ningún evento, se fuerza uno ignorando la tirada.
+  forceAfterHours: 48,
+  // Tiempo de respuesta del jugador a un evento antes de que expire (horas).
+  responseHours: 10,
 } as const;
 
 // ----------------------------------------------------------------------------

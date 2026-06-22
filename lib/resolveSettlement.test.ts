@@ -23,6 +23,7 @@ function baseState(overrides: Partial<SimSettlement> = {}): SimSettlement {
     population: 3,
     growthProgress: 0,
     famineProgress: 0,
+    firstColonistReceived: true, // por defecto, cadencia normal de 24h (no early game)
     buildings: [
       { type: BuildingType.TOWN_HALL, level: 1, workers: 0 },
       { type: BuildingType.FARM, level: 1, workers: 0 },
@@ -140,6 +141,20 @@ describe("simulate — crecimiento de población", () => {
     expect(summary.colonistsArrived).toBe(2);
   });
 
+  it("el PRIMER colono nuevo llega en ~10h; los siguientes a 24h (Cambio A)", () => {
+    const s = baseState({ firstColonistReceived: false });
+    s.buildings[1].workers = 2; // granja 6/h, superávit
+    s.buildings.push({ type: BuildingType.HOUSE, level: 2, workers: 0 }); // capacidad 3+4=7
+    // A las 10h: primer colono (umbral acelerado). A 34h (10+24): el segundo.
+    const at10 = simulate(s, EPOCH, at(10));
+    expect(at10.summary.colonistsArrived).toBe(1);
+    expect(at10.state.firstColonistReceived).toBe(true);
+    const at33 = simulate(s, EPOCH, at(33));
+    expect(at33.summary.colonistsArrived).toBe(1); // el segundo aún no (necesita 34h)
+    const at34 = simulate(s, EPOCH, at(34));
+    expect(at34.summary.colonistsArrived).toBe(2);
+  });
+
   it("sin vivienda libre no crece", () => {
     const s = baseState(); // capacidad 3, población 3
     s.buildings[1].workers = 2;
@@ -191,7 +206,7 @@ describe("simulate — hambruna y pérdida de población (§5)", () => {
 describe("simulate — tiempo de construcción", () => {
   it("una mejora en curso produce a su nivel actual hasta terminar, luego al nuevo", () => {
     const s = baseState({ food: 100, wood: 15, population: 3 });
-    // Serrería N1 con 2 colonos (5/h) mejorando a N2, termina a la 1h.
+    // Serrería N1 con 2 colonos (10/h) mejorando a N2, termina a la 1h.
     s.buildings.push({
       type: BuildingType.SAWMILL,
       level: 1,
@@ -199,8 +214,8 @@ describe("simulate — tiempo de construcción", () => {
       constructionEndsAt: at(1),
     });
     const { state, summary } = simulate(s, EPOCH, at(2));
-    // 1ª hora a N1: +5 (15→20). 2ª hora a N2 (8/h): 20→28.
-    expect(state.wood).toBeCloseTo(28, 5);
+    // 1ª hora a N1: +10 (15→25). 2ª hora a N2 (16/h): 25→41.
+    expect(state.wood).toBeCloseTo(41, 5);
     const sawmill = state.buildings.find((b) => b.type === BuildingType.SAWMILL)!;
     expect(sawmill.level).toBe(2);
     expect(sawmill.constructionEndsAt ?? null).toBeNull();

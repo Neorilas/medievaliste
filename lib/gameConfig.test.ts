@@ -14,7 +14,7 @@ import { BuildingType } from "./generated/prisma/enums";
 
 describe("buildCost", () => {
   it("devuelve el coste de cada edificio construible", () => {
-    expect(buildCost(BuildingType.HOUSE)).toEqual({ wood: 15 });
+    expect(buildCost(BuildingType.HOUSE)).toEqual({ wood: 8 });
     // La Cantera se construye solo con madera (única fuente de piedra).
     expect(buildCost(BuildingType.QUARRY)).toEqual({ wood: 30 });
   });
@@ -37,8 +37,8 @@ describe("upgradeCost", () => {
 
   it("escala todos los recursos del coste base en la curva por defecto", () => {
     // House no tiene costes explícitos de mejora: usa la curva por defecto sobre
-    // su base {wood:15}. N3 → factor 1.3*(3-1)=2.6 → ceil(15*2.6)=39.
-    expect(upgradeCost(BuildingType.HOUSE, 3)).toEqual({ wood: 39 });
+    // su base {wood:8}. N3 → factor 1.3*(3-1)=2.6 → ceil(8*2.6)=21.
+    expect(upgradeCost(BuildingType.HOUSE, 3)).toEqual({ wood: 21 });
   });
 
   it("la Cantera tiene costes de mejora explícitos con piedra (construir es solo madera)", () => {
@@ -79,8 +79,8 @@ describe("maxWorkers / productionPerHour en niveles altos", () => {
   });
 
   it("los puestos extra usan la última marginal definida, escalada por nivel", () => {
-    // Serrería L1 marginales [2,3]; L3: x1.6^2=2.56; 4 puestos: 2,3,3,3 = 11 → *2.56
-    const expected = (2 + 3 + 3 + 3) * Math.pow(1.6, 2);
+    // Serrería L1 marginales [4,6]; L3: x1.6^2=2.56; 4 puestos: 4,6,6,6 = 22 → *2.56
+    const expected = (4 + 6 + 6 + 6) * Math.pow(1.6, 2);
     expect(productionPerHour(BuildingType.SAWMILL, 3, 4)).toBeCloseTo(expected, 5);
   });
 

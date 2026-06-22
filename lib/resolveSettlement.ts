@@ -59,6 +59,9 @@ export interface SimSettlement {
   population: number;
   growthProgress: number;
   famineProgress: number;
+  // ¿Ya llegó el primer colono nuevo por crecimiento? (Cambio A) Mientras es false,
+  // el primer colono usa el umbral acelerado `firstColonistHours`; el resto, 24h.
+  firstColonistReceived: boolean;
   buildings: SimBuilding[];
 }
 
@@ -284,9 +287,15 @@ export function simulate(
     const welfareOk = state.welfare > POPULATION.growthWelfareThreshold;
     if (hasRoom && foodSurplus && welfareOk) {
       state.growthProgress += h;
-      while (state.growthProgress >= POPULATION.hoursPerColonist && state.population < capacity) {
+      // El primer colono nuevo llega antes; los siguientes a la cadencia normal.
+      let threshold = state.firstColonistReceived
+        ? POPULATION.hoursPerColonist
+        : POPULATION.firstColonistHours;
+      while (state.growthProgress >= threshold && state.population < capacity) {
         state.population += 1;
-        state.growthProgress -= POPULATION.hoursPerColonist;
+        state.growthProgress -= threshold;
+        state.firstColonistReceived = true;
+        threshold = POPULATION.hoursPerColonist; // a partir de aquí, 24h
         colonistsArrived += 1;
         newEvents.push({
           type: EventType.COLONIST_ARRIVED,
@@ -377,6 +386,7 @@ export async function resolveWithinTx(
     population: settlement.population,
     growthProgress: settlement.growthProgress,
     famineProgress: settlement.famineProgress,
+    firstColonistReceived: settlement.firstColonistReceived,
     buildings: simBuildings,
   };
 
@@ -394,6 +404,7 @@ export async function resolveWithinTx(
       population: state.population,
       growthProgress: state.growthProgress,
       famineProgress: state.famineProgress,
+      firstColonistReceived: state.firstColonistReceived,
       lastTick: now,
       // Acumular la producción bruta del tramo (para las hazañas total_*_produced).
       totalFoodProduced: { increment: summary.producedFood },

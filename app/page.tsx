@@ -29,6 +29,8 @@ import {
 } from "@/components/Tutorial";
 import { AchievementsPanel, formatReward } from "@/components/AchievementsPanel";
 import { ToastStack, type Toast } from "@/components/GameToasts";
+import { EventModal } from "@/components/EventModal";
+import type { EventView } from "@/lib/events";
 
 interface PlayerInfo {
   email?: string | null;
@@ -234,6 +236,8 @@ export default function Game() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [panelOpen, setPanelOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [pendingEvent, setPendingEvent] = useState<EventView | null>(null);
+  const [eventBusy, setEventBusy] = useState(false);
   const toastId = useRef(0);
 
   const dismissToast = useCallback((id: number) => {
@@ -289,12 +293,53 @@ export default function Game() {
     [router, pushReactions],
   );
 
+  // Comprueba si hay un evento aleatorio activo (genera uno si procede en el servidor).
+  const loadEvent = useCallback(async () => {
+    try {
+      const res = await fetch("/api/events/pending");
+      if (!res.ok) return;
+      const data = await res.json();
+      setPendingEvent(data.event ?? null);
+    } catch {
+      /* silencioso: los eventos no deben romper la carga del juego */
+    }
+  }, []);
+
+  // Resuelve el evento activo (aceptar/rechazar). Refresca el estado del asentamiento.
+  const resolveEvent = useCallback(
+    async (action: "accept" | "decline") => {
+      if (!pendingEvent) return;
+      setEventBusy(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/events/${pendingEvent.id}/resolve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "No se pudo resolver el evento");
+        if (data.settlement) setView(data.settlement);
+        pushReactions(data.newAchievements);
+        setPendingEvent(null);
+        // Por si tocara encolar otro (poco habitual: el timer no ha corrido aún).
+        loadEvent();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Error");
+      } finally {
+        setEventBusy(false);
+      }
+    },
+    [pendingEvent, pushReactions, loadEvent],
+  );
+
   // Carga inicial.
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         await load(true);
+        if (active) await loadEvent();
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : "Error al cargar");
       }
@@ -302,7 +347,7 @@ export default function Game() {
     return () => {
       active = false;
     };
-  }, [load]);
+  }, [load, loadEvent]);
 
   // Cuenta atrás: refresca el reloj cada segundo mientras haya alguna obra en curso.
   const hasConstruction = !!view?.buildings.some((b) => b.construction);
@@ -404,6 +449,14 @@ export default function Game() {
       <TutorialLayer />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
       {panelOpen && <AchievementsPanel onClose={() => setPanelOpen(false)} />}
+      {pendingEvent && (
+        <EventModal
+          event={pendingEvent}
+          resources={view.resources}
+          busy={eventBusy}
+          onResolve={resolveEvent}
+        />
+      )}
     </TutorialProvider>
   );
 }

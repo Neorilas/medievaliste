@@ -131,6 +131,11 @@ model Settlement {
   // Población
   population Int @default(3) // colonos totales (asignados + libres)
 
+  // ¿Ya llegó el primer colono nuevo por crecimiento? (Cambio A, bloque 4) Mientras
+  // es false, el primer colono usa el umbral acelerado (firstColonistHours); el resto,
+  // la cadencia normal de 24h. El motor diferido lo pone a true al recibir el primero.
+  firstColonistReceived Boolean @default(false)
+
   // Motor de cálculo diferido
   lastTick DateTime @default(now())
 
@@ -145,8 +150,14 @@ model Settlement {
   // Las claves válidas viven en lib/tutorial.ts, no aquí.
   tutorialProgress Json @default("{}")
 
-  buildings Building[]
-  events    Event[]
+  // Eventos aleatorios (Bloque 4): timestamp del último evento GENERADO. El motor de
+  // generación diferida (lib/events.ts) lo compara con el instante actual para decidir
+  // si toca generar uno nuevo, sin necesidad de cron.
+  lastEventAt DateTime?
+
+  buildings   Building[]
+  events      Event[]
+  worldEvents WorldEvent[]
 
   createdAt DateTime @default(now())
 }
@@ -198,6 +209,46 @@ enum EventType {
   PLAGUE
   FAMINE // hambruna: pérdida de población por bienestar bajo
   // Futuro: ATTACKED, ALLIANCE_REQUEST, etc. (no implementar en v0)
+}
+
+// Eventos aleatorios interactivos (Bloque 4 §B): mercaderes que ofrecen tratos,
+// inclemencias que aplican un efecto, peregrini que traen colonos. A diferencia de
+// `Event` (log interno del motor: plaga/hambruna/colono, con flag `seen`), estos son
+// eventos con NARRATIVA y RESPUESTA del jugador (aceptar/rechazar) o efecto directo.
+// La narrativa, el pool de personajes y la lógica viven en lib/events.ts.
+model WorldEvent {
+  id           String          @id @default(cuid())
+  settlement   Settlement      @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  settlementId String
+  type         WorldEventType
+  status       WorldEventStatus @default(PENDING)
+  // Clave del personaje del pool en lib/events.ts (ej. "mercator_01"). Null en las
+  // inclemencias (texto objetivo, sin personaje).
+  characterKey String?
+  // Datos de la mecánica: trade → { give:{resource,amount}, receive:{resource,amount} };
+  // inclemencia/colono → { effect:{...} }. La forma exacta la define lib/events.ts.
+  payload      Json
+  createdAt    DateTime         @default(now())
+  expiresAt    DateTime // createdAt + EVENTS.responseHours; al cruzarlo pasa a EXPIRED
+  resolvedAt   DateTime?
+
+  @@index([settlementId, status])
+}
+
+enum WorldEventType {
+  TRADE_FAVORABLE
+  TRADE_NEUTRAL
+  TRADE_UNFAVORABLE
+  INCLEMENCY
+  COLONIST_ARRIVAL
+  // Reservados para fases futuras: MILITARY, SPECIAL
+}
+
+enum WorldEventStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
 }
 
 // Las 10 regiones de la Hispania romana. La región define el "mundo" online del
