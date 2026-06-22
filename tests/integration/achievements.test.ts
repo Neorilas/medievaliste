@@ -51,17 +51,15 @@ describe("hazañas — canje manual", () => {
     });
     await detect(settlementId);
 
-    const ua = await prisma.userAchievement.findFirstOrThrow({
-      where: { userId, achievementId: "wood_1" },
-    });
-
-    const reward = await claimAchievement(userId, ua.id);
+    const reward = await claimAchievement(userId, "wood_1");
     expect(reward).toEqual({ food: 50 });
 
     const after = await prisma.settlement.findUniqueOrThrow({ where: { id: settlementId } });
     expect(after.food).toBe(before.food + 50);
 
-    const claimed = await prisma.userAchievement.findUniqueOrThrow({ where: { id: ua.id } });
+    const claimed = await prisma.userAchievement.findFirstOrThrow({
+      where: { userId, achievementId: "wood_1" },
+    });
     expect(claimed.claimedAt).not.toBeNull();
 
     const pending = await prisma.$transaction((tx) => countPendingClaims(tx, userId));
@@ -75,14 +73,11 @@ describe("hazañas — canje manual", () => {
       data: { totalWoodProduced: 100 },
     });
     await detect(settlementId);
-    const ua = await prisma.userAchievement.findFirstOrThrow({
-      where: { userId, achievementId: "wood_1" },
-    });
 
-    await claimAchievement(userId, ua.id);
+    await claimAchievement(userId, "wood_1");
     const afterFirst = await prisma.settlement.findUniqueOrThrow({ where: { id: settlementId } });
 
-    await expect(claimAchievement(userId, ua.id)).rejects.toBeInstanceOf(ClaimError);
+    await expect(claimAchievement(userId, "wood_1")).rejects.toBeInstanceOf(ClaimError);
 
     const afterSecond = await prisma.settlement.findUniqueOrThrow({ where: { id: settlementId } });
     expect(afterSecond.food).toBe(afterFirst.food); // sin segunda entrega
@@ -95,12 +90,9 @@ describe("hazañas — canje manual", () => {
       data: { totalWoodProduced: 100 },
     });
     await detect(owner.settlementId);
-    const ua = await prisma.userAchievement.findFirstOrThrow({
-      where: { userId: owner.userId, achievementId: "wood_1" },
-    });
 
     const intruder = await createUser();
-    await expect(claimAchievement(intruder.id, ua.id)).rejects.toMatchObject({
+    await expect(claimAchievement(intruder.id, "wood_1")).rejects.toMatchObject({
       reason: "not_found",
     });
   });

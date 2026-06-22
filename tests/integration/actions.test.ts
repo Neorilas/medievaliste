@@ -10,7 +10,7 @@ describe("applyAction", () => {
     const { settlementId } = await createUserWithSettlement();
     await applyAction(settlementId, { kind: "build", buildingType: BuildingType.HOUSE });
     const s = await prisma.settlement.findUniqueOrThrow({ where: { id: settlementId }, include: { buildings: true } });
-    expect(s.wood).toBe(0); // 15 - 15
+    expect(s.wood).toBe(7); // 15 inicial - 8 (coste Casa)
     expect(s.buildings.some((b) => b.type === BuildingType.HOUSE)).toBe(true);
   });
 

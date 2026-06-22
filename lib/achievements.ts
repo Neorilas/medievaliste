@@ -453,6 +453,10 @@ export class ClaimError extends Error {
  * transacción: aplica los recursos al settlement y escribe claimedAt. Idempotente
  * frente a dobles clics gracias a un update condicional sobre claimedAt == null.
  *
+ * `achievementId` es el id de la DEFINICIÓN (p. ej. "wood_1"), que es lo que la UI
+ * conoce. La búsqueda por la clave única (userId, achievementId) garantiza de paso
+ * la propiedad: si no hay fila para ese usuario, es "not_found".
+ *
  * Lanza ClaimError("not_found") si la hazaña no existe o no es del usuario, y
  * ClaimError("already_claimed") si ya fue reclamada.
  */
@@ -463,10 +467,10 @@ export async function claimAchievement(
   const { prisma } = await import("./prisma");
   return prisma.$transaction(async (tx) => {
     const ua = await tx.userAchievement.findUnique({
-      where: { id: achievementId },
-      select: { id: true, userId: true, achievementId: true, claimedAt: true },
+      where: { userId_achievementId: { userId, achievementId } },
+      select: { id: true, achievementId: true, claimedAt: true },
     });
-    if (!ua || ua.userId !== userId) throw new ClaimError("not_found");
+    if (!ua) throw new ClaimError("not_found");
     if (ua.claimedAt !== null) throw new ClaimError("already_claimed");
 
     const def = getAchievement(ua.achievementId);
