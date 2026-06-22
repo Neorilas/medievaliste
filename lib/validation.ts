@@ -143,7 +143,8 @@ function validateAssign(
   }
   const b = s.buildings.find((x) => x.id === buildingId);
   if (!b) return fail("El edificio no existe.");
-  if (!PRODUCERS[b.type]) {
+  // Admiten colonos los productores y el Cuartel (aloja soldados, Bloque 6).
+  if (!PRODUCERS[b.type] && b.type !== BuildingType.BARRACKS) {
     return fail("Este edificio no admite colonos.");
   }
   const slots = maxWorkers(b.type, b.level);

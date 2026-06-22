@@ -9,12 +9,23 @@
 import { Region } from "./generated/prisma/enums";
 import { REGIONS } from "./regionConfig";
 import { ensureRegionNeutrals } from "./neutralSettlements";
+import { MILITARY } from "./gameConfig";
 
 export interface MapMarker {
   name: string;
   level: number; // nivel de Ayuntamiento (jugadores) o nivel del neutral
   posX: number;
   posY: number;
+}
+
+// Relación de un jugador del mapa respecto al que mira (Bloque 6). Se expone para
+// que la UI sepa qué interacción ofrecer; NUNCA se exponen recursos ni fuerza ajena.
+export type MapRelation = "none" | "vassal" | "lord";
+
+export interface PlayerMarker extends MapMarker {
+  id: string; // id del asentamiento (necesario para declarar guerra)
+  relation: MapRelation; // respecto al jugador que mira: ¿es mi vasallo / mi señor?
+  immune: boolean; // inmunidad de novato activa (no se puede conquistar). §1.6
 }
 
 export interface RegionMapView {
@@ -27,7 +38,7 @@ export interface RegionMapView {
   // Región a la que pertenece el jugador (para resaltarla en la vista global).
   playerRegion: Region;
   self: (MapMarker & { id: string }) | null;
-  players: MapMarker[]; // otros jugadores de la región
+  players: PlayerMarker[]; // otros jugadores de la región
   neutrals: MapMarker[];
 }
 
@@ -48,7 +59,17 @@ export async function getRegionMap(
 
   const me = await prisma.settlement.findUniqueOrThrow({
     where: { id: settlementId },
-    select: { id: true, name: true, townHallLevel: true, region: true, posX: true, posY: true },
+    select: {
+      id: true,
+      name: true,
+      townHallLevel: true,
+      region: true,
+      posX: true,
+      posY: true,
+      // Vasallaje (Bloque 6): mi señor y mis vasallos, para marcar la relación en el mapa.
+      overlord: { select: { lordId: true } },
+      vassals: { select: { vassalId: true } },
+    },
   });
   if (!me.region) return null;
   const region = regionOverride ?? me.region;
@@ -57,16 +78,22 @@ export async function getRegionMap(
   // Idempotente: garantiza que la región tenga su tablero de neutrales.
   await ensureRegionNeutrals(region);
 
+  const myLordId = me.overlord?.lordId ?? null;
+  const myVassalIds = new Set(me.vassals.map((v) => v.vassalId));
+
   const [others, neutrals] = await Promise.all([
     prisma.settlement.findMany({
       where: { region, id: { not: settlementId }, posX: { not: null }, posY: { not: null } },
-      select: { name: true, townHallLevel: true, posX: true, posY: true },
+      select: { id: true, name: true, townHallLevel: true, posX: true, posY: true, createdAt: true },
     }),
     prisma.neutralSettlement.findMany({
       where: { region },
       select: { name: true, level: true, posX: true, posY: true },
     }),
   ]);
+
+  const now = Date.now();
+  const immunityMs = MILITARY.newbieImmunityDays * 24 * 60 * 60 * 1000;
 
   return {
     region,
@@ -78,12 +105,25 @@ export async function getRegionMap(
       isOwnRegion && me.posX !== null && me.posY !== null
         ? { id: me.id, name: me.name, level: me.townHallLevel, posX: me.posX, posY: me.posY }
         : null,
-    players: others.map((o) => ({
-      name: o.name,
-      level: o.townHallLevel,
-      posX: o.posX!,
-      posY: o.posY!,
-    })),
+    players: others.map((o) => {
+      // La relación solo tiene sentido en la región propia (donde puedo interactuar).
+      const relation: MapRelation = !isOwnRegion
+        ? "none"
+        : o.id === myLordId
+          ? "lord"
+          : myVassalIds.has(o.id)
+            ? "vassal"
+            : "none";
+      return {
+        id: o.id,
+        name: o.name,
+        level: o.townHallLevel,
+        posX: o.posX!,
+        posY: o.posY!,
+        relation,
+        immune: now < o.createdAt.getTime() + immunityMs,
+      };
+    }),
     neutrals: neutrals.map((n) => ({
       name: n.name,
       level: n.level,

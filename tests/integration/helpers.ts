@@ -5,6 +5,8 @@ import { getOrCreateSettlementForUser } from "../../lib/settlement";
 export { prisma };
 
 const TABLES = [
+  "WarDeclaration",
+  "Vassalage",
   "Event",
   "Building",
   "Settlement",

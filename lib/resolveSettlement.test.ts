@@ -285,3 +285,42 @@ describe("simulate — plaga", () => {
     expect(summary.plagueActive).toBe(false);
   });
 });
+
+describe("tributo del vasallo (Bloque 6, §1.4)", () => {
+  it("sin tributo (asentamiento libre) no se cede nada", () => {
+    const s = baseState({ buildings: [{ type: BuildingType.SAWMILL, level: 1, workers: 2 }] });
+    const { summary } = simulate(s, EPOCH, at(1), []);
+    expect(summary.tributeWood).toBe(0);
+    // Serrería N1 con 2 colonos = 10 madera/h.
+    expect(summary.producedWood).toBeCloseTo(10, 5);
+    expect(summary.wood).toBeCloseTo(10, 5); // todo lo producido se almacena
+  });
+
+  it("un vasallo cede el % indicado de su producción bruta y solo almacena el resto", () => {
+    const s = baseState({ buildings: [{ type: BuildingType.SAWMILL, level: 1, workers: 2 }] });
+    // 10 madera/h producidas; con 15% de tributo, cede 1.5/h y almacena 8.5/h.
+    const { summary } = simulate(s, EPOCH, at(1), [], 15);
+    expect(summary.producedWood).toBeCloseTo(10, 5); // bruto intacto (hazañas)
+    expect(summary.tributeWood).toBeCloseTo(1.5, 5);
+    expect(summary.wood).toBeCloseTo(8.5, 5); // delta almacenado = 85%
+  });
+
+  it("el tributo es independiente del tope de almacén del vasallo", () => {
+    // Mucha producción durante mucho tiempo: el almacén del vasallo se llena, pero el
+    // tributo sigue siendo el 15% de TODO lo producido (se calcula antes del tope).
+    // Autosuficiente (Granja + Serrería, 4 colonos) para que no haya hambruna que
+    // mate colonos y frene la producción de madera.
+    const s = baseState({
+      wood: 0,
+      population: 4,
+      buildings: [
+        { type: BuildingType.FARM, level: 1, workers: 2 }, // +6 comida/h > consumo (4/h)
+        { type: BuildingType.SAWMILL, level: 1, workers: 2 }, // 10 madera/h
+      ],
+    });
+    const { state, summary } = simulate(s, EPOCH, at(100), [], 15);
+    expect(state.wood).toBeLessThanOrEqual(storageCap(0)); // acotado al tope
+    // 10/h * 100h = 1000 bruto → 150 de tributo, sin importar el tope.
+    expect(summary.tributeWood).toBeCloseTo(150, 5);
+  });
+});

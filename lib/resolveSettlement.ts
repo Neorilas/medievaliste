@@ -96,6 +96,12 @@ export interface ResolveSummary {
   producedFood: number;
   producedWood: number;
   producedStone: number;
+  // Tributo cedido al señor en el tramo (Bloque 6, §1.4): % de la producción bruta.
+  // Lo descuenta de lo que el vasallo almacena y resolveWithinTx lo abona al señor.
+  // 0 si el asentamiento es libre (tributePct = 0).
+  tributeFood: number;
+  tributeWood: number;
+  tributeStone: number;
 }
 
 export interface SimResult {
@@ -165,7 +171,12 @@ export function simulate(
   lastTick: Date,
   now: Date,
   activePlagues: ActivePlague[] = [],
+  // % de producción que se cede al señor si este asentamiento es vasallo (§1.4).
+  // 0 (por defecto) = asentamiento libre, sin tributo.
+  tributePct = 0,
 ): SimResult {
+  // Fracción de la producción que el vasallo cede (resto = lo que almacena).
+  const tributeFrac = Math.max(0, Math.min(1, tributePct / 100));
   // Copia profunda del estado para no mutar la entrada.
   const state: SimSettlement = {
     ...input,
@@ -180,6 +191,10 @@ export function simulate(
   let producedFood = 0;
   let producedWood = 0;
   let producedStone = 0;
+  // Tributo cedido al señor en todo el tramo (§1.4).
+  let tributeFood = 0;
+  let tributeWood = 0;
+  let tributeStone = 0;
 
   // Completa las obras cuyo `constructionEndsAt` ya pasó en el instante `atMs`:
   // sube el edificio a `level + 1` (0→1 si era nuevo) y libera la obra. Si es el
@@ -239,13 +254,23 @@ export function simulate(
 
     // Producción bruta del tramo (para los contadores acumulados de las hazañas):
     // lo que producen los edificios, antes de consumo y antes del tope de almacén.
-    producedFood += foodRate * h;
-    producedWood += woodRate * h;
-    producedStone += stoneRate * h;
+    const foodGross = foodRate * h;
+    const woodGross = woodRate * h;
+    const stoneGross = stoneRate * h;
+    producedFood += foodGross;
+    producedWood += woodGross;
+    producedStone += stoneGross;
 
-    state.food = Math.min(cap, state.food + foodRate * h);
-    state.wood = Math.min(cap, state.wood + woodRate * h);
-    state.stone = Math.min(cap, state.stone + stoneRate * h);
+    // Tributo (§1.4): el vasallo cede `tributeFrac` de su producción bruta al señor y
+    // solo almacena el resto. El tributo NO depende del tope de almacén del vasallo.
+    tributeFood += foodGross * tributeFrac;
+    tributeWood += woodGross * tributeFrac;
+    tributeStone += stoneGross * tributeFrac;
+    const keep = 1 - tributeFrac;
+
+    state.food = Math.min(cap, state.food + foodGross * keep);
+    state.wood = Math.min(cap, state.wood + woodGross * keep);
+    state.stone = Math.min(cap, state.stone + stoneGross * keep);
 
     // --- Consumo de comida ---
     const foodConsumed = state.population * CONSUMPTION.foodPerColonistPerHour * h;
@@ -332,6 +357,9 @@ export function simulate(
     producedFood,
     producedWood,
     producedStone,
+    tributeFood,
+    tributeWood,
+    tributeStone,
   };
 
   return { state, newEvents, summary };
@@ -360,7 +388,9 @@ export async function resolveWithinTx(
 ): Promise<ResolvedSettlement> {
   const settlement = await tx.settlement.findUniqueOrThrow({
     where: { id: settlementId },
-    include: { buildings: true },
+    // overlord = vasallaje en el que ESTE asentamiento es el vasallo (su señor y el
+    // % de tributo). null si es libre.
+    include: { buildings: true, overlord: true },
   });
 
   // Plagas activas: eventos PLAGUE cuyo payload.until aún no ha pasado.
@@ -394,7 +424,14 @@ export async function resolveWithinTx(
     buildings: simBuildings,
   };
 
-  const { state, newEvents, summary } = simulate(input, settlement.lastTick, now, activePlagues);
+  const tributePct = settlement.overlord?.tributePct ?? 0;
+  const { state, newEvents, summary } = simulate(
+    input,
+    settlement.lastTick,
+    now,
+    activePlagues,
+    tributePct,
+  );
 
   await tx.settlement.update({
     where: { id: settlementId },
@@ -449,6 +486,27 @@ export async function resolveWithinTx(
         payload: e.payload as object,
         occurredAt: e.occurredAt,
       })),
+    });
+  }
+
+  // Tributo al señor (§1.4): abona al señor lo que el vasallo cedió en este tramo.
+  // Se suma a sus recursos almacenados (su propia resolución acotará al tope de
+  // almacén) y a sus contadores informativos de tributo recibido. Si el señor está
+  // por encima del tope, el exceso se descarta en su próximo recálculo (como toda
+  // producción que rebosa). El abono es perezoso: ocurre cuando el VASALLO juega.
+  const lordId = settlement.overlord?.lordId;
+  const tributeTotal = summary.tributeFood + summary.tributeWood + summary.tributeStone;
+  if (lordId && tributeTotal > 1e-9) {
+    await tx.settlement.update({
+      where: { id: lordId },
+      data: {
+        food: { increment: summary.tributeFood },
+        wood: { increment: summary.tributeWood },
+        stone: { increment: summary.tributeStone },
+        tributeReceivedFood: { increment: summary.tributeFood },
+        tributeReceivedWood: { increment: summary.tributeWood },
+        tributeReceivedStone: { increment: summary.tributeStone },
+      },
     });
   }
 

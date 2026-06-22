@@ -1,21 +1,58 @@
 "use client";
 
-// Tablero 2D abstracto de una región (CAMBIO 4). Coordenadas 0–100.
+// Tablero 2D abstracto de una región (CAMBIO 4 + Bloque 6). Coordenadas 0–100.
 // Pinta el asentamiento propio (destacado), los de otros jugadores y los
-// neutrales (NPC). En v1 solo son visibles, no interactuables.
+// neutrales (NPC). Sobre otro jugador de TU región puedes declarar guerra (§1.2).
 
 import { useState } from "react";
 import Link from "next/link";
-import type { RegionMapView, MapMarker } from "@/lib/map";
+import type { RegionMapView, MapMarker, PlayerMarker } from "@/lib/map";
+import type { WarResult } from "@/lib/warfare";
 
 type Kind = "self" | "player" | "neutral";
 
-interface Placed extends MapMarker {
-  kind: Kind;
-}
+// Marcador colocado en el tablero. Los de jugador llevan los campos extra de
+// PlayerMarker (id, relación, inmunidad); los demás, solo los de MapMarker.
+type Placed = (MapMarker & { kind: "self" | "neutral" }) | (PlayerMarker & { kind: "player" });
 
-export function RegionBoard({ map }: { map: RegionMapView }) {
+const RELATION_NOTE: Record<PlayerMarker["relation"], string | null> = {
+  none: null,
+  lord: "👑 Es tu señor. Puedes rebelarte desde tu asentamiento si tu fuerza lo supera.",
+  vassal: "🔗 Es tu vasallo: te cede parte de su producción.",
+};
+
+export function RegionBoard({ map, onChanged }: { map: RegionMapView; onChanged?: () => void }) {
   const [active, setActive] = useState<Placed | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [warError, setWarError] = useState<string | null>(null);
+  const [warResult, setWarResult] = useState<WarResult | null>(null);
+
+  function select(m: Placed | null) {
+    setActive(m);
+    setWarError(null);
+    setWarResult(null);
+  }
+
+  async function declareWar(defenderId: string) {
+    setBusy(true);
+    setWarError(null);
+    setWarResult(null);
+    try {
+      const r = await fetch("/api/war/declare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defenderId }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error ?? "No se pudo declarar la guerra.");
+      setWarResult(data.result as WarResult);
+      onChanged?.(); // recargar el mapa (la relación pudo cambiar)
+    } catch (e) {
+      setWarError(e instanceof Error ? e.message : "Error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const placed: Placed[] = [
     ...map.neutrals.map((n) => ({ ...n, kind: "neutral" as const })),
@@ -44,17 +81,19 @@ export function RegionBoard({ map }: { map: RegionMapView }) {
           {placed.map((m, i) => {
             const st = STYLE[m.kind];
             const isActive = active === m;
+            const isVassal = m.kind === "player" && m.relation === "vassal";
+            const isLord = m.kind === "player" && m.relation === "lord";
             return (
               <g
                 key={`${m.kind}-${i}`}
                 className="cursor-pointer"
-                onClick={() => setActive(isActive ? null : m)}
+                onClick={() => select(isActive ? null : m)}
               >
                 <circle
                   cx={m.posX}
                   cy={m.posY}
                   r={st.r + (isActive ? 1 : 0)}
-                  fill={st.fill}
+                  fill={isVassal ? "#34d399" : isLord ? "#f59e0b" : st.fill}
                   stroke={st.stroke}
                   strokeWidth={m.kind === "self" ? 0.8 : 0.5}
                 />
@@ -79,11 +118,12 @@ export function RegionBoard({ map }: { map: RegionMapView }) {
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
         {map.self && <Legend color={map.regionColor} label="Tu asentamiento" ring />}
         <Legend color="#818cf8" label={`Otros jugadores (${map.players.length})`} />
+        <Legend color="#34d399" label="Tus vasallos" />
         <Legend color="#71717a" label={`Neutrales (${map.neutrals.length})`} />
       </div>
       {!map.isOwnRegion && (
         <p className="mt-2 text-xs text-zinc-500">
-          🔭 Estás explorando una región ajena. Aquí no tienes asentamiento.
+          🔭 Estás explorando una región ajena. Aquí no tienes asentamiento ni puedes guerrear.
         </p>
       )}
 
@@ -99,14 +139,13 @@ export function RegionBoard({ map }: { map: RegionMapView }) {
               {active.kind === "neutral" ? `Nivel ${active.level}` : `Ayuntamiento N${active.level}`}
             </span>
           </div>
+
           {active.kind === "neutral" && (
             <p className="mt-1 text-xs text-zinc-500">
               Asentamiento neutral. En el futuro podrás saquearlo o conquistarlo.
             </p>
           )}
-          {active.kind === "player" && (
-            <p className="mt-1 text-xs text-zinc-500">Otro colono de tu región.</p>
-          )}
+
           {active.kind === "self" && (
             <Link
               href="/"
@@ -114,6 +153,46 @@ export function RegionBoard({ map }: { map: RegionMapView }) {
             >
               Gestionar asentamiento →
             </Link>
+          )}
+
+          {/* Interacción de guerra (solo en la región propia) */}
+          {active.kind === "player" && map.isOwnRegion && (
+            <div className="mt-2">
+              {RELATION_NOTE[active.relation] && (
+                <p className="text-xs text-zinc-400">{RELATION_NOTE[active.relation]}</p>
+              )}
+
+              {!warResult && active.relation === "none" && active.immune && (
+                <p className="text-xs text-emerald-400">
+                  🛡️ Protegido por la inmunidad de novato. Aún no puede ser conquistado.
+                </p>
+              )}
+
+              {!warResult && active.relation === "none" && !active.immune && (
+                <button
+                  onClick={() => declareWar(active.id)}
+                  disabled={busy}
+                  className="mt-1 inline-block rounded bg-rose-700 px-3 py-1 text-xs font-medium text-white hover:bg-rose-600 disabled:opacity-50"
+                >
+                  {busy ? "Resolviendo…" : "⚔️ Declarar guerra"}
+                </button>
+              )}
+
+              {warError && <p className="mt-2 text-xs text-rose-300">⚠️ {warError}</p>}
+
+              {warResult && (
+                <div className="mt-2 rounded-md border border-zinc-700 bg-zinc-950 p-2 text-xs">
+                  <p className={warResult.attackerWon ? "text-emerald-300" : "text-rose-300"}>
+                    {warResult.attackerWon
+                      ? `¡Victoria! ${warResult.defenderName} es ahora tu vasallo.`
+                      : `Derrota. ${warResult.defenderName} resistió tu ataque.`}
+                  </p>
+                  <p className="mt-1 text-zinc-400">
+                    Tu fuerza {warResult.attackerForce} · su fuerza {warResult.defenderForce}
+                  </p>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

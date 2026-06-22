@@ -9,6 +9,9 @@ import {
   upgradeCost,
   TOWN_HALL,
   MAX_TOWN_HALL_LEVEL,
+  barracksSlots,
+  militaryForce,
+  MILITARY,
 } from "./gameConfig";
 import { BuildingType } from "./generated/prisma/enums";
 
@@ -114,5 +117,65 @@ describe("constructionSeconds (tiempo de obra)", () => {
   it("el Ayuntamiento tiene su propia tabla, más lenta", () => {
     expect(constructionSeconds(BuildingType.TOWN_HALL, 2)).toBe(600);
     expect(constructionSeconds(BuildingType.TOWN_HALL, 3)).toBe(1800);
+  });
+});
+
+describe("fuerza militar (Bloque 6)", () => {
+  it("el Cuartel admite soldados según su nivel (maxWorkers = barracksSlots)", () => {
+    expect(barracksSlots(0)).toBe(0); // en obra, sin puestos
+    expect(barracksSlots(1)).toBe(3);
+    expect(barracksSlots(2)).toBe(5);
+    expect(maxWorkers(BuildingType.BARRACKS, 1)).toBe(3);
+    expect(maxWorkers(BuildingType.BARRACKS, 2)).toBe(5);
+  });
+
+  it("el Cuartel no produce recursos acumulables", () => {
+    expect(productionPerHour(BuildingType.BARRACKS, 2, 3)).toBe(0);
+  });
+
+  it("un asentamiento sin edificios militares solo tiene fuerza por recursos", () => {
+    const force = militaryForce({ buildings: [], food: 20, wood: 20, stone: 10 });
+    expect(force).toBe(Math.round(50 * MILITARY.forcePerStoredResource));
+  });
+
+  it("los soldados del Cuartel aportan fuerza y escalan con el nivel", () => {
+    const l1 = militaryForce({
+      buildings: [{ type: BuildingType.BARRACKS, level: 1, workers: 3 }],
+      food: 0,
+      wood: 0,
+      stone: 0,
+    });
+    expect(l1).toBe(3 * MILITARY.forcePerSoldierL1);
+    // A nivel 2, cada soldado rinde x barracksLevelFactor.
+    const l2 = militaryForce({
+      buildings: [{ type: BuildingType.BARRACKS, level: 2, workers: 3 }],
+      food: 0,
+      wood: 0,
+      stone: 0,
+    });
+    expect(l2).toBe(Math.round(3 * MILITARY.forcePerSoldierL1 * MILITARY.barracksLevelFactor));
+  });
+
+  it("la Muralla aporta fuerza por nivel; los edificios en obra (nivel 0) no cuentan", () => {
+    const force = militaryForce({
+      buildings: [
+        { type: BuildingType.WALL, level: 2, workers: 0 },
+        { type: BuildingType.BARRACKS, level: 0, workers: 0 }, // en obra: no cuenta
+      ],
+      food: 0,
+      wood: 0,
+      stone: 0,
+    });
+    expect(force).toBe(2 * MILITARY.forcePerWallLevel);
+  });
+
+  it("los soldados se acotan a los puestos disponibles del Cuartel", () => {
+    const force = militaryForce({
+      buildings: [{ type: BuildingType.BARRACKS, level: 1, workers: 99 }],
+      food: 0,
+      wood: 0,
+      stone: 0,
+    });
+    expect(force).toBe(3 * MILITARY.forcePerSoldierL1); // clamp a 3 puestos
   });
 });

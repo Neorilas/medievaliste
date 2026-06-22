@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BuildOption,
   BuildingView,
+  MilitaryView,
   SettlementView,
   TownHallUpgrade,
 } from "@/lib/settlement";
@@ -53,6 +54,8 @@ const BUILDING_LABEL: Record<string, string> = {
   HOUSE: "Casa",
   WAREHOUSE: "Almacén",
   PLAZA: "Plaza",
+  BARRACKS: "Cuartel",
+  WALL: "Muralla",
 };
 const BUILDING_ICON: Record<string, string> = {
   TOWN_HALL: "🏛️",
@@ -62,6 +65,8 @@ const BUILDING_ICON: Record<string, string> = {
   HOUSE: "🏠",
   WAREHOUSE: "📦",
   PLAZA: "⛲",
+  BARRACKS: "⚔️",
+  WALL: "🧱",
 };
 const RESOURCE_ICON: Record<string, string> = {
   food: "🍞",
@@ -415,6 +420,19 @@ export default function Game() {
     }
   }, []);
 
+  // Rebelión contra el señor (Bloque 6, §1.5). Devuelve el resultado o un error.
+  const rebel = useCallback(async (): Promise<{ won: boolean } | string> => {
+    try {
+      const res = await fetch("/api/war/rebel", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) return data.error ?? "No se pudo iniciar la rebelión.";
+      setView(data.settlement);
+      return { won: data.result?.attackerWon ?? false };
+    } catch {
+      return "Error de red al rebelarse.";
+    }
+  }, []);
+
   if (error && !view) {
     return (
       <main className="flex flex-1 items-center justify-center bg-zinc-950 p-6 text-zinc-100">
@@ -449,6 +467,7 @@ export default function Game() {
         nowMs={nowMs}
         dispatch={dispatch}
         rename={rename}
+        rebel={rebel}
         onOpenPanel={() => setPanelOpen(true)}
         pendingClaims={pendingClaims}
       />
@@ -502,6 +521,7 @@ interface GameViewProps {
   nowMs: number;
   dispatch: (action: ActionBody) => void;
   rename: (name: string) => Promise<string | null>;
+  rebel: () => Promise<{ won: boolean } | string>;
   onOpenPanel: () => void;
   pendingClaims: number;
 }
@@ -519,6 +539,7 @@ function GameView({
   nowMs,
   dispatch,
   rename,
+  rebel,
   onOpenPanel,
   pendingClaims,
 }: GameViewProps) {
@@ -616,6 +637,9 @@ function GameView({
         </div>
       </section>
 
+      {/* Militar y vasallaje (Bloque 6) */}
+      <MilitaryPanel military={view.military} rebel={rebel} />
+
       {error && view && (
         <p className="rounded-md bg-rose-950/60 px-3 py-2 text-sm text-rose-300">⚠️ {error}</p>
       )}
@@ -664,6 +688,108 @@ function GameView({
         </div>
       </section>
     </main>
+  );
+}
+
+// Panel militar y de vasallaje (Bloque 6, §1). Muestra la fuerza propia, el estado
+// de vasallaje (señor o vasallos), el tributo recibido y el historial de guerras.
+function MilitaryPanel({
+  military,
+  rebel,
+}: {
+  military: MilitaryView;
+  rebel: () => Promise<{ won: boolean } | string>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const tr = military.tributeReceived;
+  const hasTribute = tr.food + tr.wood + tr.stone > 0.5;
+
+  async function onRebel() {
+    setBusy(true);
+    setMsg(null);
+    const r = await rebel();
+    setBusy(false);
+    if (typeof r === "string") setMsg(`⚠️ ${r}`);
+    else setMsg(r.won ? "🎉 ¡Rebelión victoriosa! Eres libre." : "Rebelión fallida. Sigues siendo vasallo.");
+  }
+
+  return (
+    <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-zinc-400">⚔️ Fuerza militar</span>
+        <span className="font-semibold tabular-nums">{military.force}</span>
+      </div>
+      <p className="mt-1 text-xs text-zinc-500">
+        Cuartel (soldados) + Muralla + recursos almacenados.
+      </p>
+
+      {/* Vasallaje: señor */}
+      {military.lord && (
+        <div className="mt-2 rounded-md border border-amber-800/60 bg-amber-950/30 p-2 text-xs">
+          <p className="text-amber-200">
+            👑 Eres vasallo de <span className="font-medium">{military.lord.name}</span> · le cedes{" "}
+            {military.lord.tributePct}% de tu producción.
+          </p>
+          <button
+            onClick={onRebel}
+            disabled={busy || !military.canRebel}
+            className="mt-2 rounded bg-rose-700 px-3 py-1 font-medium text-white hover:bg-rose-600 disabled:opacity-50"
+            title={military.canRebel ? "Tu fuerza supera la de tu señor" : "Tu fuerza aún no supera la de tu señor"}
+          >
+            {busy ? "Rebelándote…" : "🚩 Rebelarse"}
+          </button>
+          {!military.canRebel && (
+            <p className="mt-1 text-amber-400/80">
+              Necesitas más fuerza que tu señor para rebelarte (Cuartel y Muralla ayudan).
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Vasallaje: vasallos */}
+      {military.vassals.length > 0 && (
+        <div className="mt-2 text-xs">
+          <p className="text-zinc-400">🔗 Tus vasallos ({military.vassals.length}):</p>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {military.vassals.map((v) => (
+              <li key={v.name} className="flex items-center justify-between text-zinc-300">
+                <span>{v.name}</span>
+                <span className="text-zinc-500">cede {v.tributePct}%</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Tributo recibido (acumulado) */}
+      {hasTribute && (
+        <p className="mt-2 text-xs text-emerald-300">
+          Tributo recibido: {fmt(tr.food)} 🍞 · {fmt(tr.wood)} 🪵 · {fmt(tr.stone)} 🪨
+        </p>
+      )}
+
+      {/* Historial reciente de guerras */}
+      {military.recentWars.length > 0 && (
+        <div className="mt-2 border-t border-zinc-800 pt-2 text-xs">
+          <p className="text-zinc-500">Guerras recientes:</p>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {military.recentWars.map((w, i) => (
+              <li key={i} className="text-zinc-400">
+                {w.role === "attacker" ? "⚔️ Atacaste a " : "🛡️ Te atacó "}
+                <span className="text-zinc-300">{w.opponentName}</span>
+                {w.isRebellion && " (rebelión)"} —{" "}
+                <span className={w.won ? "text-emerald-400" : "text-rose-400"}>
+                  {w.won ? "victoria" : "derrota"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {msg && <p className="mt-2 text-xs text-zinc-300">{msg}</p>}
+    </section>
   );
 }
 
@@ -738,7 +864,8 @@ function BuildingCard({
 }) {
   const isProducer = b.produces !== null;
   const isNew = b.level === 0; // construcción inicial (aún no funcional)
-  const showWorkers = isProducer && !isNew;
+  // El Cuartel admite colonos (soldados) aunque no produzca un recurso acumulable.
+  const showWorkers = b.acceptsWorkers && !isNew;
   const canAddWorker = showWorkers && b.workers < b.maxWorkers && freeColonists > 0;
   const canRemoveWorker = showWorkers && b.workers > 0;
   const colonistRef = useTutorialAnchor(colonistAnchor && showWorkers ? "sawColonistAssign" : null);
@@ -762,7 +889,7 @@ function BuildingCard({
       {/* Asignar colonos */}
       {showWorkers && (
         <div ref={colonistRef} className="mt-2 flex items-center gap-3">
-          <span className="text-xs text-zinc-400">Colonos</span>
+          <span className="text-xs text-zinc-400">{b.type === "BARRACKS" ? "Soldados" : "Colonos"}</span>
           <button
             disabled={busy || !canRemoveWorker}
             onClick={() => onAssign(b.workers - 1)}

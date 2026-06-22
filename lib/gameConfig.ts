@@ -110,8 +110,12 @@ export const PRODUCERS: Partial<Record<BuildingType, ProducerConfig>> = {
 
 /** Nº máximo de colonos que un edificio puede emplear útilmente a este nivel. */
 export function maxWorkers(type: BuildingType, level: number): number {
+  if (level < 1) return 0; // level 0 = aún en construcción, no admite colonos
+  // El Cuartel (Bloque 6) aloja SOLDADOS (colonos), no es un productor de recursos:
+  // sus puestos viven en BARRACKS_SLOTS, no en PRODUCERS.
+  if (type === BuildingType.BARRACKS) return barracksSlots(level);
   const cfg = PRODUCERS[type];
-  if (!cfg || level < 1) return 0; // level 0 = aún en construcción, no admite colonos
+  if (!cfg) return 0;
   return cfg.marginalsL1.length + (level - 1) * cfg.extraWorkerSlotsPerLevel;
 }
 
@@ -229,8 +233,12 @@ export const MAX_TOWN_HALL_LEVEL = 3;
 // ----------------------------------------------------------------------------
 // Nivel mínimo de Ayuntamiento para poder CONSTRUIR cada tipo.
 // La Cantera "se desbloquea más tarde" (§3): requiere Ayuntamiento N2.
+// Cuartel y Muralla (Bloque 6) son edificios militares de mid-game: requieren N2
+// (la guerra no es una preocupación early — hay inmunidad de novato de 7 días).
 export const BUILD_MIN_TOWN_HALL: Partial<Record<BuildingType, number>> = {
   [BuildingType.QUARRY]: 2,
+  [BuildingType.BARRACKS]: 2,
+  [BuildingType.WALL]: 2,
 };
 
 // Coste de CONSTRUIR un edificio nuevo (siempre a nivel 1).
@@ -246,6 +254,9 @@ export const BUILD_COST: Partial<Record<BuildingType, Partial<Record<Resource, n
   [BuildingType.QUARRY]: { wood: 30 },
   [BuildingType.FARM]: { wood: 18 },
   [BuildingType.WAREHOUSE]: { wood: 25 },
+  // Edificios militares (Bloque 6): requieren piedra (mid-game, ya hay Cantera).
+  [BuildingType.BARRACKS]: { wood: 40, stone: 20 },
+  [BuildingType.WALL]: { wood: 30, stone: 40 },
   // TOWN_HALL no se construye: existe desde el inicio y solo se mejora.
 };
 
@@ -379,6 +390,70 @@ export const EVENTS = {
 } as const;
 
 // ----------------------------------------------------------------------------
+// Conquista y vasallaje (Bloque 6, §1). Toda la fuerza militar y las reglas de
+// guerra se derivan de estos números; la lógica vive en lib/warfare.ts.
+//
+// FUERZA MILITAR = soldados del Cuartel + defensa de la Muralla + recursos
+// almacenados (§1.2). Es un único valor usado tanto para atacar como para
+// defender; el bando con más fuerza gana, y en empate gana el defensor.
+//
+// ⚠️ VALORES DE PARTIDA, a calibrar jugando.
+// ----------------------------------------------------------------------------
+export const MILITARY = {
+  // Tributo: % de producción que un vasallo cede a su señor (§1.4). Fijo en v1.
+  vassalTributePct: 15,
+  // Inmunidad de novato: un asentamiento recién creado no puede ser conquistado
+  // durante estos días desde su creación (§1.6).
+  newbieImmunityDays: 7,
+  // Un mismo agresor no puede atacar al mismo defensor más de una vez cada N horas (§1.6).
+  attackCooldownHours: 48,
+  // Fuerza que aporta cada soldado (colono en el Cuartel) a nivel 1; escala con el nivel.
+  forcePerSoldierL1: 12,
+  barracksLevelFactor: 1.5,
+  // Fuerza (defensiva) que aporta cada nivel de Muralla.
+  forcePerWallLevel: 40,
+  // Fuerza que aporta cada unidad de recurso almacenado (food + wood + stone).
+  forcePerStoredResource: 0.05,
+} as const;
+
+// Puestos de soldado del Cuartel por nivel (no son productores: van aparte de PRODUCERS).
+export const BARRACKS_SLOTS = { base: 3, extraPerLevel: 2 } as const;
+
+/** Plazas de soldado de un Cuartel a un nivel dado (0 si aún está en obra). */
+export function barracksSlots(level: number): number {
+  return level >= 1 ? BARRACKS_SLOTS.base + (level - 1) * BARRACKS_SLOTS.extraPerLevel : 0;
+}
+
+/** Fuerza que aportan `soldiers` soldados en un Cuartel de nivel `level`. */
+function barracksForce(level: number, soldiers: number): number {
+  if (level < 1 || soldiers <= 0) return 0;
+  const effective = Math.min(soldiers, barracksSlots(level));
+  return effective * MILITARY.forcePerSoldierL1 * Math.pow(MILITARY.barracksLevelFactor, level - 1);
+}
+
+export interface ForceInput {
+  buildings: { type: BuildingType; level: number; workers: number }[];
+  food: number;
+  wood: number;
+  stone: number;
+}
+
+/**
+ * Fuerza militar total de un asentamiento (§1.2). Edificios en obra (nivel 0) no
+ * cuentan. Función PURA: la usan tanto la resolución de guerra como la vista.
+ */
+export function militaryForce(input: ForceInput): number {
+  let force = 0;
+  for (const b of input.buildings) {
+    if (b.level < 1) continue;
+    if (b.type === BuildingType.BARRACKS) force += barracksForce(b.level, b.workers);
+    else if (b.type === BuildingType.WALL) force += b.level * MILITARY.forcePerWallLevel;
+  }
+  force += (input.food + input.wood + input.stone) * MILITARY.forcePerStoredResource;
+  return Math.round(force);
+}
+
+// ----------------------------------------------------------------------------
 // Preview de mejora (Cambio B2): qué stat relevante cambia al subir de nivel.
 // Devuelve SOLO el delta que importa de cada edificio (menos es más), como
 // pares "valor actual → valor siguiente nivel". El cliente solo lo pinta.
@@ -424,6 +499,26 @@ export function upgradePreview(type: BuildingType, currentLevel: number): StatDe
   if (type === BuildingType.WAREHOUSE) {
     return [
       { label: "Capacidad de almacén", from: storageCap(currentLevel), to: storageCap(next) },
+    ];
+  }
+
+  if (type === BuildingType.BARRACKS) {
+    return [
+      {
+        label: "Fuerza militar (cuartel lleno)",
+        from: Math.round(barracksForce(currentLevel, barracksSlots(currentLevel))),
+        to: Math.round(barracksForce(next, barracksSlots(next))),
+      },
+    ];
+  }
+
+  if (type === BuildingType.WALL) {
+    return [
+      {
+        label: "Fuerza de muralla",
+        from: currentLevel * MILITARY.forcePerWallLevel,
+        to: next * MILITARY.forcePerWallLevel,
+      },
     ];
   }
 

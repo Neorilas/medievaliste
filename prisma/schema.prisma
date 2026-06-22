@@ -160,9 +160,28 @@ model Settlement {
   // si toca generar uno nuevo, sin necesidad de cron.
   lastEventAt DateTime?
 
+  // --- Tributo recibido como SEÑOR (Bloque 6, §1.4) ---
+  // Total acumulado de recursos que los vasallos han cedido a este asentamiento a lo
+  // largo del tiempo (línea separada en el inventario del señor). Solo crece; el motor
+  // diferido del vasallo lo incrementa al ceder su parte. El recurso EFECTIVO ya se
+  // suma a food/wood/stone (acotado por almacén); estos contadores son informativos.
+  tributeReceivedFood  Float @default(0)
+  tributeReceivedWood  Float @default(0)
+  tributeReceivedStone Float @default(0)
+
   buildings   Building[]
   events      Event[]
   worldEvents WorldEvent[]
+
+  // --- Conquista y vasallaje (Bloque 6, §1) ---
+  // Vasallaje en el que ESTE asentamiento es el SEÑOR (puede tener muchos vasallos).
+  vassals  Vassalage[] @relation("LordVassals")
+  // Vasallaje en el que ESTE asentamiento es el VASALLO (como mucho uno; de ahí el
+  // @unique en Vassalage.vassalId). null = asentamiento libre.
+  overlord Vassalage?  @relation("VassalLord")
+  // Guerras declaradas por/contra este asentamiento (historial e idempotencia de cooldown).
+  warsAttacked WarDeclaration[] @relation("Attacker")
+  warsDefended WarDeclaration[] @relation("Defender")
 
   createdAt DateTime @default(now())
 }
@@ -195,6 +214,8 @@ enum BuildingType {
   HOUSE // Casa: aumenta capacidad de población
   WAREHOUSE // Almacén: aumenta topes de almacenamiento
   PLAZA // Plaza: genera bienestar (requiere colonos)
+  BARRACKS // Cuartel (Bloque 6): aloja soldados (colonos asignados) → fuerza militar
+  WALL // Muralla (Bloque 6): defensa por nivel → fuerza militar (no requiere colonos)
 }
 
 model Event {
@@ -213,7 +234,11 @@ enum EventType {
   COLONIST_ARRIVED
   PLAGUE
   FAMINE // hambruna: pérdida de población por bienestar bajo
-  // Futuro: ATTACKED, ALLIANCE_REQUEST, etc. (no implementar en v0)
+  // Guerra (Bloque 6): WAR_ATTACK = resultado de un ataque que YO lancé; WAR_DEFENSE =
+  // me atacaron a MÍ. El desenlace (victoria/derrota, vasallaje) va en el payload.
+  WAR_ATTACK
+  WAR_DEFENSE
+  // Futuro: ALLIANCE_REQUEST, etc.
 }
 
 // Eventos aleatorios interactivos (Bloque 4 §B): mercaderes que ofrecen tratos,
@@ -286,4 +311,44 @@ model NeutralSettlement {
   createdAt DateTime @default(now())
 
   @@index([region])
+}
+
+// Relación de vasallaje (Bloque 6, §1.1). Jerarquía PLANA: un vasallo tiene
+// exactamente un señor (de ahí @unique en vassalId) y un vasallo NO puede tener
+// vasallos propios. Al conquistar a un señor, sus vasallos se liberan (lib/warfare.ts).
+model Vassalage {
+  id         String   @id @default(cuid())
+  lordId     String
+  vassalId   String   @unique // un vasallo tiene como mucho un señor
+  // % de producción que el vasallo cede al señor. Fijo por diseño en v1
+  // (gameConfig.MILITARY.vassalTributePct); se copia aquí al crear el vasallaje.
+  tributePct Int      @default(15)
+  startedAt  DateTime @default(now())
+
+  lord   Settlement @relation("LordVassals", fields: [lordId], references: [id], onDelete: Cascade)
+  vassal Settlement @relation("VassalLord", fields: [vassalId], references: [id], onDelete: Cascade)
+
+  @@index([lordId])
+}
+
+// Declaración de guerra (Bloque 6, §1.2). La resolución es INMEDIATA por stats: al
+// crearse ya se rellenan winnerId/resolvedAt y las fuerzas de ambos bandos (registro
+// histórico e idempotencia del cooldown de 48h entre el mismo agresor y defensor).
+model WarDeclaration {
+  id            String    @id @default(cuid())
+  attackerId    String
+  defenderId    String
+  declaredAt    DateTime  @default(now())
+  resolvedAt    DateTime?
+  winnerId      String?
+  attackerForce Int
+  defenderForce Int
+  // ¿Era una rebelión de un vasallo contra su señor? (§1.5) Cambia las consecuencias:
+  // si el vasallo gana, queda libre (en vez de tomar al defensor como vasallo).
+  isRebellion   Boolean   @default(false)
+
+  attacker Settlement @relation("Attacker", fields: [attackerId], references: [id], onDelete: Cascade)
+  defender Settlement @relation("Defender", fields: [defenderId], references: [id], onDelete: Cascade)
+
+  @@index([attackerId, defenderId, declaredAt])
 }

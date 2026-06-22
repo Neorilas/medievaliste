@@ -127,7 +127,9 @@ export default function MapPage() {
       {selected && (
         <>
           {loading && <p className="text-zinc-400">Cargando región…</p>}
-          {!loading && map && map.region === selected && <RegionBoard map={map} />}
+          {!loading && map && map.region === selected && (
+            <RegionBoard map={map} onChanged={() => loadRegion(selected)} />
+          )}
         </>
       )}
     </main>

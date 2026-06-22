@@ -25,6 +25,8 @@ import {
   upgradeCost,
   upgradePreview,
   CONSUMPTION,
+  militaryForce,
+  MILITARY,
   type StatDelta,
 } from "./gameConfig";
 import { validateAction, type Cost, type SettlementSnapshot } from "./validation";
@@ -42,6 +44,8 @@ const BUILDABLE: BuildingType[] = [
   BuildingType.HOUSE,
   BuildingType.WAREHOUSE,
   BuildingType.PLAZA,
+  BuildingType.BARRACKS,
+  BuildingType.WALL,
 ];
 
 /** Asegura que el usuario tiene un asentamiento (lo crea en el primer acceso) y devuelve su id. */
@@ -104,6 +108,9 @@ export interface BuildingView {
   maxWorkers: number; // puestos a este nivel
   productionPerHour: number; // producción actual del edificio
   produces: string | null; // recurso que produce, o null
+  // ¿Admite colonos? Productores y Cuartel (soldados). Distinto de `produces`: el
+  // Cuartel acepta colonos pero no produce un recurso acumulable (genera fuerza).
+  acceptsWorkers: boolean;
   upgrade: UpgradeInfo | null; // null para el Ayuntamiento (usa townHallUpgrade)
   // Obra en curso (construcción inicial o mejora). null si está terminado.
   construction: {
@@ -178,6 +185,29 @@ export interface SettlementView {
     payload: unknown;
     occurredAt: string;
   }[];
+  // Conquista y vasallaje (Bloque 6, §1).
+  military: MilitaryView;
+}
+
+export interface MilitaryView {
+  // Fuerza militar propia (cuartel + muralla + recursos). §1.2
+  force: number;
+  // Mi señor, si soy vasallo (null = libre). Incluye el % de producción que cedo.
+  lord: { name: string; tributePct: number } | null;
+  // ¿Puedo rebelarme ya? (soy vasallo y mi fuerza supera la del señor). §1.5
+  canRebel: boolean;
+  // Mis vasallos (si soy señor).
+  vassals: { name: string; tributePct: number }[];
+  // Tributo TOTAL recibido como señor a lo largo del tiempo (línea informativa). §1.4
+  tributeReceived: { food: number; wood: number; stone: number };
+  // Historial reciente de guerras que me involucran (para enterarme de ataques sufridos).
+  recentWars: {
+    role: "attacker" | "defender";
+    opponentName: string;
+    won: boolean; // ¿gané yo?
+    isRebellion: boolean;
+    at: string; // ISO
+  }[];
 }
 
 /** Estado completo del asentamiento para el cliente. NO recalcula (eso es resolveSettlement). */
@@ -189,6 +219,26 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
     include: {
       buildings: { orderBy: { createdAt: "asc" } },
       events: { where: { seen: false }, orderBy: { occurredAt: "asc" } },
+      // Vasallaje (Bloque 6): mi señor (con sus edificios/recursos para estimar si
+      // ya puedo rebelarme) y mis vasallos.
+      overlord: {
+        include: {
+          lord: { select: { name: true, buildings: true, food: true, wood: true, stone: true } },
+        },
+      },
+      vassals: { include: { vassal: { select: { name: true } } } },
+    },
+  });
+
+  // Historial reciente de guerras que involucran a este asentamiento (§1: para que
+  // el defensor se entere de ataques sufridos al volver a entrar).
+  const recentWarRows = await prisma.warDeclaration.findMany({
+    where: { OR: [{ attackerId: settlementId }, { defenderId: settlementId }] },
+    orderBy: { declaredAt: "desc" },
+    take: 5,
+    include: {
+      attacker: { select: { id: true, name: true } },
+      defender: { select: { id: true, name: true } },
     },
   });
 
@@ -242,6 +292,7 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
       maxWorkers: maxWorkers(b.type, b.level),
       productionPerHour: productionPerHour(b.type, b.level, b.workers),
       produces: producer ? producer.resource : null,
+      acceptsWorkers: !!producer || b.type === BuildingType.BARRACKS,
       upgrade,
       construction: b.constructionEndsAt
         ? {
@@ -290,6 +341,49 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
 
   const cooldownRemaining = renameCooldownRemaining(s.nameChangedAt);
 
+  // --- Bloque militar (§1) ---
+  const ownForce = militaryForce({
+    buildings: s.buildings,
+    food: s.food,
+    wood: s.wood,
+    stone: s.stone,
+  });
+  // Estimación de si puedo rebelarme: mi fuerza > la de mi señor (con sus recursos
+  // almacenados actuales). El endpoint de rebelión vuelve a comprobarlo tras cerrar
+  // el tramo de ambos, así que esto es solo una pista para la UI.
+  let canRebel = false;
+  if (s.overlord) {
+    const lord = s.overlord.lord;
+    const lordForce = militaryForce({
+      buildings: lord.buildings,
+      food: lord.food,
+      wood: lord.wood,
+      stone: lord.stone,
+    });
+    canRebel = ownForce > lordForce;
+  }
+  const military: MilitaryView = {
+    force: ownForce,
+    lord: s.overlord ? { name: s.overlord.lord.name, tributePct: s.overlord.tributePct } : null,
+    canRebel,
+    vassals: s.vassals.map((v) => ({ name: v.vassal.name, tributePct: v.tributePct })),
+    tributeReceived: {
+      food: s.tributeReceivedFood,
+      wood: s.tributeReceivedWood,
+      stone: s.tributeReceivedStone,
+    },
+    recentWars: recentWarRows.map((w) => {
+      const role = w.attackerId === settlementId ? "attacker" : "defender";
+      return {
+        role,
+        opponentName: role === "attacker" ? w.defender.name : w.attacker.name,
+        won: w.winnerId === settlementId,
+        isRebellion: w.isRebellion,
+        at: w.declaredAt.toISOString(),
+      } as const;
+    }),
+  };
+
   return {
     id: s.id,
     name: s.name,
@@ -330,5 +424,6 @@ export async function getSettlementView(settlementId: string): Promise<Settlemen
       payload: e.payload,
       occurredAt: e.occurredAt.toISOString(),
     })),
+    military,
   };
 }
